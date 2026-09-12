@@ -1,0 +1,12 @@
+# netmigrate/ir.py, blocks.py, and transforms.py use only the standard
+# library (dataclasses, enum, typing, ipaddress, re) -- no runtime
+# dependencies yet.
+
+# Testing
+# pytest>=7.4
+fastapi
+uvicorn[standard]
+jinja2
+python-multipart
+google-genai
+pytest
