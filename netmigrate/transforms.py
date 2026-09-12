@@ -226,13 +226,27 @@ def render_interface_type(canonical: str, vendor: str) -> str:
     return cisco if vendor == "cisco" else huawei
 
 
-def slot_needs_review(if_number: str) -> bool:
+# Logical interfaces have no physical slot -- their number is an index or a
+# VLAN id, so the slot-mismatch warning does not apply to them.
+LOGICAL_TYPES = {"loopback", "vlan", "portchannel"}
+
+
+def slot_needs_review(if_number: str, canonical_type: str | None = None) -> bool:
     """True if the numeric portion has a non-zero leading slot.
 
     Port numbering is not algorithmically translatable (proposal 2.3.2.4), so
     a non-zero slot means the target device may not have that port.
+
+    Two guards against false warnings:
+
+    * Logical interfaces (Loopback, Vlanif, Eth-Trunk) are exempt -- their
+      number is an index, not a slot. ``Vlanif10`` is VLAN 10, not slot 10.
+    * Slot/port notation requires a separator. A bare number is an index, so
+      ``GigabitEthernet1`` is not treated as slot 1.
     """
-    if not if_number:
+    if canonical_type in LOGICAL_TYPES:
+        return False
+    if "/" not in if_number:
         return False
     first = if_number.split("/")[0]
     try:

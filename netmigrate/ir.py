@@ -30,11 +30,17 @@ class Vendor(str, Enum):
 
 
 class Provenance(str, Enum):
-    """How a given output line was produced. Drives the coverage metric."""
+    """How a given output line was produced. Drives the coverage metric.
+
+    GENERATED covers lines the renderer creates that correspond to no source
+    line -- separators, the trailing ``return``. They are excluded from all
+    metrics; counting them as rule output would inflate coverage.
+    """
 
     RULE = "RULE"
     AI = "AI"
     UNMAPPED = "UNMAPPED"
+    GENERATED = "GENERATED"
 
 
 class LinkType(str, Enum):

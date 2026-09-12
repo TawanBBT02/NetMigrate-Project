@@ -341,11 +341,23 @@ def test_vlan_interface_not_confused_with_vlan_block():
 
 
 def test_slot_review_flag():
-    assert tf.slot_needs_review("0/0/1") is False
-    assert tf.slot_needs_review("1/0/1") is True
-    assert tf.slot_needs_review("0/1") is False
-    assert tf.slot_needs_review("") is False
-    assert tf.slot_needs_review("10") is True
+    assert tf.slot_needs_review("0/0/1", "gigabit") is False
+    assert tf.slot_needs_review("1/0/1", "gigabit") is True
+    assert tf.slot_needs_review("0/1", "gigabit") is False
+    assert tf.slot_needs_review("", "gigabit") is False
+
+
+def test_slot_review_exempts_logical_interfaces():
+    """Vlanif10 is VLAN 10, not slot 10 -- must not warn."""
+    assert tf.slot_needs_review("10", "vlan") is False
+    assert tf.slot_needs_review("1", "loopback") is False
+    assert tf.slot_needs_review("1", "portchannel") is False
+
+
+def test_slot_review_needs_slash_notation():
+    """A bare number is an index, not a slot."""
+    assert tf.slot_needs_review("10", "gigabit") is False
+    assert tf.slot_needs_review("1/1", "gigabit") is True
 
 
 # --------------------------------------------------------------------------
