@@ -16,6 +16,8 @@ is excluded from comparison because line numbers necessarily change.
 from __future__ import annotations
 
 import dataclasses
+import statistics
+import time
 from dataclasses import fields, is_dataclass
 from typing import Any
 
@@ -104,7 +106,7 @@ class RoundTripReport:
     rule_lines: int = 0
     ai_lines: int = 0
     unmapped_lines: int = 0
-    duration_ms: int = 0
+    duration_ms: float = 0.0
 
     @property
     def rule_coverage(self) -> float:
@@ -194,6 +196,73 @@ class GoldenReport:
     diff: str = ""
     skipped: bool = False
     reason: str = ""
+
+
+# --------------------------------------------------------------------------
+# Timing
+# --------------------------------------------------------------------------
+
+
+@dataclasses.dataclass
+class TimingReport:
+    """Conversion timing over several repeats.
+
+    A single measurement of a sub-millisecond operation is mostly scheduler
+    noise. Report the median as the headline figure -- it is robust against
+    the occasional outlier from garbage collection or the OS -- and keep min
+    and max so the spread is visible in the thesis rather than hidden.
+    """
+
+    repeats: int
+    median_ms: float
+    mean_ms: float
+    min_ms: float
+    max_ms: float
+
+    @property
+    def seconds_median(self) -> float:
+        return self.median_ms / 1000.0
+
+    def reduction_vs(self, manual_seconds: float) -> float:
+        """Proportional time reduction against a manual baseline. Tests H4."""
+        if manual_seconds <= 0:
+            return 0.0
+        return 1.0 - (self.seconds_median / manual_seconds)
+
+
+def benchmark_convert(
+    text: str,
+    source: Vendor,
+    target: Vendor,
+    repeats: int = 50,
+) -> TimingReport | None:
+    """Time a conversion over ``repeats`` runs. None if the pair is missing.
+
+    The AI fallback is never invoked here: it makes a network call, which
+    would dominate the measurement and make the figure unreproducible.
+    """
+    if not can_convert(source, target):
+        return None
+
+    samples: list[float] = []
+    for _ in range(max(1, repeats)):
+        started = time.perf_counter()
+        convert(text, source, target)
+        samples.append((time.perf_counter() - started) * 1000.0)
+
+    samples.sort()
+    return TimingReport(
+        repeats=len(samples),
+        median_ms=statistics.median(samples),
+        mean_ms=statistics.fmean(samples),
+        min_ms=samples[0],
+        max_ms=samples[-1],
+    )
+
+
+# --------------------------------------------------------------------------
+# Text normalisation for golden comparison
+# --------------------------------------------------------------------------
 
 
 def normalise_text(text: str) -> str:

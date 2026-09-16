@@ -1,0 +1,20 @@
+system-view
+screen-length 0 temporary
+sysname SW01
+vlan 10
+ name SALES
+vlan 20
+ name ENGINEERING
+interface GE0/1
+ description USER PORT 1
+ port link-type access
+ port default vlan 10
+ undo shutdown
+interface GE0/2
+ description USER PORT 2
+ port link-type access
+ port default vlan 20
+interface Vlanif10
+ ip address 192.168.10.1 255.255.255.0
+ip route-static 0.0.0.0 0.0.0.0 192.168.10.254
+return

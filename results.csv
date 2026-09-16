@@ -1,0 +1,4 @@
+file,direction,significant_lines,rule_lines,ai_lines,unmapped_lines,rule_coverage,round_trip,round_trip_diffs,golden,median_ms,min_ms,max_ms,repeats,simulator_load
+rtr01-ospf.cfg,cisco->huawei,15,14,0,1,0.9333,pass,0,-,0.1882,0.163,0.3652,50,
+sw01-access.cfg,cisco->huawei,18,18,0,0,1.0,pass,0,-,0.2583,0.1544,0.7622,50,
+sw02-trunk.cfg,huawei->cisco,28,27,0,1,0.9643,pass,0,-,0.3605,0.323,0.6742,50,

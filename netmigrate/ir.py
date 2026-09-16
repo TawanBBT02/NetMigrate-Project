@@ -199,7 +199,7 @@ class ConversionResult:
     rule_lines: int = 0
     ai_lines: int = 0
     unmapped_lines: int = 0
-    duration_ms: int = 0
+    duration_ms: float = 0.0  # float: conversions run well under 1 ms
 
     @property
     def rule_coverage(self) -> float:
@@ -231,6 +231,6 @@ class ConversionResult:
                 "ai_lines": self.ai_lines,
                 "unmapped_lines": self.unmapped_lines,
                 "rule_coverage": round(self.rule_coverage, 4),
-                "duration_ms": self.duration_ms,
+                "duration_ms": round(self.duration_ms, 4),
             },
         }

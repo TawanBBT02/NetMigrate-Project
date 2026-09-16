@@ -1,0 +1,23 @@
+enable
+configure terminal
+terminal length 0
+hostname SW02
+vlan 10
+ name SALES
+vlan 20
+vlan 30
+vlan 31
+vlan 32
+vlan 33
+vlan 34
+vlan 35
+interface GigabitEthernet0/0/1
+ description TRUNK TO CORE
+ switchport mode trunk
+ switchport trunk allowed vlan 10,20,30-35
+ switchport trunk native vlan 99
+ no shutdown
+interface TenGigabitEthernet0/0/25
+ description UPLINK 10G
+ switchport mode trunk
+ switchport trunk allowed vlan 10,20

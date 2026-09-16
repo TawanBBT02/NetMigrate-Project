@@ -98,7 +98,9 @@ def convert(
 
     lines = render(cfg)
 
-    duration_ms = int((time.perf_counter() - started) * 1000)
+    # No int() cast: a conversion takes well under a millisecond, so
+    # truncating to whole ms reports 0 for every file.
+    duration_ms = (time.perf_counter() - started) * 1000.0
 
     result = ConversionResult(
         source_vendor=source,
