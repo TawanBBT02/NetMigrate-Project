@@ -331,7 +331,13 @@ def _render_unmapped(out: list[OutputLine], blocks: list[UnmappedBlock]) -> None
             # so there is nothing to translate and the engine says so
             # explicitly instead of leaving the engineer to work it out.
             if block.category == "credential":
-                for line in tf.credential_guidance("huawei").splitlines():
+                # Three outcomes: a hashed value cannot be converted at all,
+                # a plaintext value could be but is deliberately withheld,
+                # and a line with no secret in it (aaa, line vty) gets no
+                # password guidance because that would be meaningless.
+                kind = tf.classify_credential(block.text)
+                guidance = tf.credential_guidance("huawei", kind)
+                for line in guidance.splitlines() if guidance else []:
                     out.append(
                         OutputLine(
                             text=f"{COMMENT}   {line}",

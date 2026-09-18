@@ -222,11 +222,11 @@ def test_credential_never_appears_uncommented():
 def test_credential_guidance_emitted_for_target_vendor():
     out = to_huawei("enable secret 5 $1$mERr$H2s\n")
     assert "irreversible-cipher" in out
-    assert "<PLAINTEXT>" in out
+    assert "<PASSWORD>" in out          # placeholder renamed from <PLAINTEXT>
 
     out = to_cisco("aaa\n local-user bob password irreversible-cipher $1c$K\n")
     assert "enable secret" in out
-    assert "<PLAINTEXT>" in out
+    assert "<PASSWORD>" in out
 
 
 def test_no_guidance_for_ordinary_unmapped():
@@ -246,6 +246,109 @@ def test_credential_lines_do_not_break_round_trip():
     report = round_trip("hostname SW1\nenable secret 5 $1$abc\n", C, H)
     assert report.ok
     assert report.unmapped_lines == 1
+
+
+# --------------------------------------------------------------------------
+# Credential classification: hashed / plaintext / no-value
+# --------------------------------------------------------------------------
+
+
+def test_classify_plaintext_credentials():
+    assert tf.classify_credential("enable secret Cisco@1234") == tf.CRED_PLAINTEXT
+    assert tf.classify_credential(
+        "username admin privilege 15 secret Admin@5678") == tf.CRED_PLAINTEXT
+
+
+def test_classify_hashed_credentials():
+    for line in (
+        "enable secret 5 $1$mERr$H2sPq",
+        "username bob secret 9 $9$nhEmQVczB7d",
+        "enable secret 8 $8$abcdef",
+        "password 7 08701E1D",
+        "local-user admin password irreversible-cipher $1c$K",
+        "snmp-agent community read cipher %^%#abc",
+    ):
+        assert tf.classify_credential(line) == tf.CRED_HASHED, line
+
+
+def test_classify_lines_carrying_no_secret():
+    """aaa / line vty / authentication-mode match the credential patterns but
+    hold no password, so password guidance would be meaningless."""
+    for line in (
+        "aaa",
+        "line vty 0 4",
+        "authentication-mode aaa",
+        "local-user admin service-type ssh",
+    ):
+        assert tf.classify_credential(line) == tf.CRED_NO_VALUE, line
+
+
+def test_ambiguous_defaults_to_hashed():
+    """Conservative: the hashed message is the safer one to be wrong about."""
+    assert tf.classify_credential("password $unknown$format") == tf.CRED_HASHED
+
+
+def test_hashed_message_says_cannot_be_converted():
+    out = to_huawei("enable secret 5 $1$mERr$H2sPq\n")
+    assert "cannot be converted" in out
+    assert "appears to be plaintext" not in out
+
+
+def test_plaintext_message_says_equivalent_exists():
+    out = to_huawei("enable secret Cisco@1234\n")
+    assert "appears to be plaintext" in out
+    assert "NOT applied automatically" in out
+    assert "cannot be converted" not in out
+
+
+def test_no_value_line_gets_no_password_guidance():
+    out = to_huawei("line vty 0 4\n login local\n")
+    assert "PASSWORD" not in out
+    assert "appears to be plaintext" not in out
+    assert "cannot be converted" not in out
+
+
+def test_guidance_lists_both_target_forms():
+    """enable secret maps to super password, username to local-user.
+    Listing both cannot be wrong; guessing one can."""
+    for src in ("enable secret Cisco@1234\n", "enable secret 5 $1$abc\n"):
+        out = to_huawei(src)
+        assert "super password level 15 cipher" in out
+        assert "local-user <NAME> password irreversible-cipher" in out
+        assert "privilege-escalation password" in out
+        assert "user account" in out
+
+    out = to_cisco("aaa\n local-user bob password irreversible-cipher $1c$K\n")
+    assert "enable secret <PASSWORD>" in out
+    assert "username <NAME> privilege 15 secret <PASSWORD>" in out
+
+
+def test_real_password_never_appears_in_guidance():
+    """The echoed source line may contain it; the guidance must not."""
+    out = to_huawei(
+        "enable secret Cisco@1234\n"
+        "username admin privilege 15 secret Admin@5678\n"
+    )
+    for line in out.splitlines():
+        if "source line" in line:
+            continue          # the echoed source line, already commented
+        assert "Cisco@1234" not in line, line
+        assert "Admin@5678" not in line, line
+
+
+def test_plaintext_credentials_still_commented():
+    out = to_huawei("enable secret Cisco@1234\n")
+    for line in out.splitlines():
+        if "Cisco@1234" in line or "PASSWORD" in line:
+            assert line.lstrip().startswith("#"), line
+
+
+def test_plaintext_credentials_still_count_as_unmapped():
+    """Classification must not change the metrics."""
+    result = convert("hostname SW1\nenable secret Cisco@1234\n", C, H)
+    assert result.unmapped_lines == 1
+    assert result.ai_lines == 0
+    assert result.rule_coverage < 1.0
 
 
 # --------------------------------------------------------------------------

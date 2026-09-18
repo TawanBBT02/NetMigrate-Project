@@ -322,19 +322,85 @@ CREDENTIAL_PATTERNS = (
     "authentication-mode", "aaa",
 )
 
-CREDENTIAL_GUIDANCE = {
+# Tokens that indicate the line actually carries a secret VALUE, as opposed to
+# merely configuring the credential subsystem. `aaa`, `line vty 0 4` and
+# `authentication-mode aaa` match CREDENTIAL_PATTERNS but hold no secret, so
+# emitting password guidance for them would be nonsense.
+VALUE_BEARING_TOKENS = (
+    "secret", "password", "cipher", "key-string",
+    "authentication-key", "md5",
+)
+
+# Markers showing the credential VALUE is already a one-way digest.
+#   Cisco:  type 5 salted MD5, type 8 PBKDF2-SHA256, type 9 scrypt, type 7
+#           reversible obfuscation
+#   Huawei: irreversible-cipher storage, %^%# wrapped cipher text
+HASH_MARKERS = (
+    "secret 5 ", "secret 8 ", "secret 9 ", "secret 4 ",
+    "password 5 ", "password 7 ", "password 8 ", "password 9 ",
+    "irreversible-cipher", "%^%#",
+)
+
+# Any dollar-delimited prefix, not just formats we recognise. An
+# unrecognised hash format must be treated as hashed: telling the user "an
+# equivalent exists" when they actually hold an unconvertible digest is the
+# damaging direction to be wrong in.
+_DOLLAR_HASH = re.compile(r"\$[^$\s]{1,12}\$")
+
+# Credential classifications returned by classify_credential().
+CRED_HASHED = "hashed"
+CRED_PLAINTEXT = "plaintext"
+CRED_NO_VALUE = "no-value"
+
+_HASHED_GUIDANCE = {
     "cisco": (
         "Password hashes cannot be converted between vendors (one-way,\n"
         "vendor-specific algorithms). Set credentials manually on the target:\n"
-        "  enable secret <PLAINTEXT>\n"
-        "  username <NAME> privilege 15 secret <PLAINTEXT>"
+        "  privilege-escalation password (from Huawei super password):\n"
+        "    enable secret <PASSWORD>\n"
+        "  user account (from Huawei local-user):\n"
+        "    username <NAME> privilege 15 secret <PASSWORD>"
     ),
     "huawei": (
         "Password hashes cannot be converted between vendors (one-way,\n"
         "vendor-specific algorithms). Set credentials manually on the target:\n"
-        "  aaa\n"
-        "   local-user <NAME> password irreversible-cipher <PLAINTEXT>\n"
-        "   local-user <NAME> privilege level 15"
+        "  privilege-escalation password (from Cisco enable secret):\n"
+        "    super password level 15 cipher <PASSWORD>\n"
+        "  user account (from Cisco username ... secret):\n"
+        "    aaa\n"
+        "     local-user <NAME> password irreversible-cipher <PASSWORD>\n"
+        "     local-user <NAME> privilege level 15"
+    ),
+}
+
+# Both target forms are listed rather than guessing which applies. Detecting
+# the source command type is more code and another thing that can be subtly
+# wrong; listing both with labels cannot be wrong, and the operator knows
+# which they need.
+_PLAINTEXT_GUIDANCE = {
+    "cisco": (
+        "This value appears to be plaintext, so an equivalent credential\n"
+        "exists on the target -- but it is NOT applied automatically:\n"
+        "credentials must be set deliberately by an operator, and this\n"
+        "generated file may be shared or committed. Suggested target forms,\n"
+        "choose per the source command:\n"
+        "  privilege-escalation password (from super password):\n"
+        "    enable secret <PASSWORD>\n"
+        "  user account (from local-user):\n"
+        "    username <NAME> privilege 15 secret <PASSWORD>"
+    ),
+    "huawei": (
+        "This value appears to be plaintext, so an equivalent credential\n"
+        "exists on the target -- but it is NOT applied automatically:\n"
+        "credentials must be set deliberately by an operator, and this\n"
+        "generated file may be shared or committed. Suggested target forms,\n"
+        "choose per the source command:\n"
+        "  privilege-escalation password (from enable secret/password):\n"
+        "    super password level 15 cipher <PASSWORD>\n"
+        "  user account (from username ... secret):\n"
+        "    aaa\n"
+        "     local-user <NAME> password irreversible-cipher <PASSWORD>\n"
+        "     local-user <NAME> privilege level 15"
     ),
 }
 
@@ -350,6 +416,44 @@ def is_credential_line(text: str) -> bool:
                for p in CREDENTIAL_PATTERNS)
 
 
-def credential_guidance(target_vendor: str) -> str:
-    """Manual-entry guidance for the target vendor. 'cisco' or 'huawei'."""
-    return CREDENTIAL_GUIDANCE[target_vendor]
+def classify_credential(text: str) -> str:
+    """Classify a credential line as hashed, plaintext, or carrying no value.
+
+    Three outcomes, because the right message differs for each:
+
+    * ``CRED_NO_VALUE`` -- the line configures the credential subsystem but
+      holds no secret (``aaa``, ``line vty 0 4``, ``authentication-mode aaa``).
+      Password guidance would be meaningless, so none is emitted.
+    * ``CRED_HASHED`` -- the value is a one-way digest. No conversion exists
+      without the plaintext, which a saved configuration does not contain.
+    * ``CRED_PLAINTEXT`` -- an equivalent exists, but the system still refuses
+      to apply it: writing a live credential into a generated file that may be
+      shared or committed is a security problem regardless of feasibility.
+
+    Conservative by design: anything ambiguous is reported as hashed, because
+    the hashed message is the safer of the two to be wrong about.
+    """
+    lowered = text.strip().lower()
+
+    if not any(token in lowered for token in VALUE_BEARING_TOKENS):
+        return CRED_NO_VALUE
+
+    if any(marker in lowered for marker in HASH_MARKERS):
+        return CRED_HASHED
+
+    if _DOLLAR_HASH.search(lowered):
+        return CRED_HASHED
+
+    return CRED_PLAINTEXT
+
+
+def credential_guidance(target_vendor: str, kind: str = CRED_HASHED) -> str:
+    """Guidance text for the target vendor and credential kind.
+
+    Returns an empty string for CRED_NO_VALUE -- the caller emits only the
+    plain review tag in that case.
+    """
+    if kind == CRED_NO_VALUE:
+        return ""
+    table = _PLAINTEXT_GUIDANCE if kind == CRED_PLAINTEXT else _HASHED_GUIDANCE
+    return table[target_vendor]

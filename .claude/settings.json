@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python tools/run_tests.py)",
+      "Bash(.venv/Scripts/python -c \"import fastapi, starlette, httpx; print\\(fastapi.__version__, starlette.__version__, httpx.__version__\\)\")",
+      "Bash(.venv/Scripts/python -c ' *)",
+      "Bash(.venv/Scripts/python tests/test_api.py)",
+      "Bash(.venv/Scripts/python tools/run_tests.py)",
+      "Bash(.venv/Scripts/python -m pytest -q)",
+      "Bash(python3 -)",
+      "Bash(node --check /tmp/_check.js)",
+      "Bash(node --check scratch_check.js)"
+    ]
+  }
+}

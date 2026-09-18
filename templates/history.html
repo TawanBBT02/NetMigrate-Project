@@ -1,0 +1,176 @@
+{% extends "base.html" %}
+
+{% block title %}History &mdash; NetMigrate{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+  <h1 class="text-xl font-semibold">Conversion history</h1>
+
+  <div class="overflow-x-auto border border-gray-200 dark:border-gray-700 rounded">
+    <table class="w-full text-sm">
+      <thead class="text-left text-gray-500 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700">
+        <tr>
+          <th class="py-1.5 px-3 font-medium">#</th>
+          <th class="py-1.5 px-3 font-medium">Date</th>
+          <th class="py-1.5 px-3 font-medium">Direction</th>
+          <th class="py-1.5 px-3 font-medium">File</th>
+          <th class="py-1.5 px-3 font-medium">Rule coverage</th>
+          <th class="py-1.5 px-3 font-medium"></th>
+        </tr>
+      </thead>
+      <tbody id="history-table-body"></tbody>
+    </table>
+    <p id="history-empty" class="hidden px-3 py-4 text-sm text-gray-500 dark:text-gray-400">
+      No conversions recorded yet.
+    </p>
+  </div>
+
+  <div class="flex items-center gap-3 text-sm">
+    <button type="button" id="history-prev-btn"
+            class="px-3 py-1.5 rounded border border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50">
+      &larr; Newer
+    </button>
+    <span id="history-page-label" class="text-gray-500 dark:text-gray-400"></span>
+    <button type="button" id="history-next-btn"
+            class="px-3 py-1.5 rounded border border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50">
+      Older &rarr;
+    </button>
+  </div>
+
+  <section id="history-detail-section" class="hidden space-y-3 border-t border-gray-200 dark:border-gray-700 pt-6">
+    <div class="flex flex-wrap items-center justify-between gap-2">
+      <h2 id="history-detail-title" class="text-sm font-medium"></h2>
+      <div class="flex gap-2">
+        <a id="history-export-link" href="#"
+           class="px-3 py-1.5 rounded border border-gray-300 dark:border-gray-600 text-sm hover:bg-gray-100 dark:hover:bg-gray-700">
+          Export JSON
+        </a>
+        <button type="button" id="history-close-btn"
+                class="px-3 py-1.5 rounded border border-gray-300 dark:border-gray-600 text-sm hover:bg-gray-100 dark:hover:bg-gray-700">
+          Close
+        </button>
+      </div>
+    </div>
+    <div id="history-diff-view"></div>
+  </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/diff.js" defer></script>
+<script defer>
+  document.addEventListener('DOMContentLoaded', () => {
+    const LIMIT = 20;
+    let offset = 0;
+
+    const tableBody = document.getElementById('history-table-body');
+    const emptyMsg = document.getElementById('history-empty');
+    const prevBtn = document.getElementById('history-prev-btn');
+    const nextBtn = document.getElementById('history-next-btn');
+    const pageLabel = document.getElementById('history-page-label');
+
+    const detailSection = document.getElementById('history-detail-section');
+    const detailTitle = document.getElementById('history-detail-title');
+    const exportLink = document.getElementById('history-export-link');
+    const closeBtn = document.getElementById('history-close-btn');
+    const diffView = document.getElementById('history-diff-view');
+
+    let lastPageSize = 0;
+
+    function renderRows(records) {
+      tableBody.textContent = '';
+      emptyMsg.classList.toggle('hidden', records.length > 0);
+      for (const record of records) {
+        const tr = document.createElement('tr');
+        tr.className = 'border-b border-gray-100 dark:border-gray-800 last:border-0';
+
+        tr.appendChild(Object.assign(document.createElement('td'), {
+          className: 'py-1.5 px-3', textContent: `#${record.id}`,
+        }));
+        tr.appendChild(Object.assign(document.createElement('td'), {
+          className: 'py-1.5 px-3 text-gray-500 dark:text-gray-400', textContent: record.created_at,
+        }));
+        tr.appendChild(Object.assign(document.createElement('td'), {
+          className: 'py-1.5 px-3', textContent: `${record.source_vendor} → ${record.target_vendor}`,
+        }));
+        tr.appendChild(Object.assign(document.createElement('td'), {
+          className: 'py-1.5 px-3 config-pre', textContent: record.filename || '—',
+        }));
+        tr.appendChild(Object.assign(document.createElement('td'), {
+          className: 'py-1.5 px-3', textContent: `${(record.metrics.rule_coverage * 100).toFixed(1)}%`,
+        }));
+
+        const actionsCell = document.createElement('td');
+        actionsCell.className = 'py-1.5 px-3 text-right whitespace-nowrap';
+        const viewBtn = document.createElement('button');
+        viewBtn.type = 'button';
+        viewBtn.className = 'text-blue-600 dark:text-blue-400 hover:underline text-sm mr-3';
+        viewBtn.textContent = 'View diff';
+        viewBtn.addEventListener('click', () => openDetail(record.id));
+        const deleteBtn = document.createElement('button');
+        deleteBtn.type = 'button';
+        deleteBtn.className = 'text-red-600 dark:text-red-400 hover:underline text-sm';
+        deleteBtn.textContent = 'Delete';
+        deleteBtn.addEventListener('click', () => deleteRecord(record.id));
+        actionsCell.appendChild(viewBtn);
+        actionsCell.appendChild(deleteBtn);
+        tr.appendChild(actionsCell);
+
+        tableBody.appendChild(tr);
+      }
+    }
+
+    async function loadPage() {
+      try {
+        const records = await NetMigrate.apiGet(`/api/conversions?limit=${LIMIT}&offset=${offset}`);
+        lastPageSize = records.length;
+        renderRows(records);
+        pageLabel.textContent = `Showing ${offset + 1}–${offset + records.length}`;
+        prevBtn.disabled = offset === 0;
+        nextBtn.disabled = records.length < LIMIT;
+      } catch (err) {
+        // error banner already shown
+      }
+    }
+
+    async function openDetail(id) {
+      try {
+        const record = await NetMigrate.apiGet(`/api/conversions/${id}`);
+        detailTitle.textContent =
+          `Conversion #${record.id} — ${record.source_vendor} → ${record.target_vendor}` +
+          (record.filename ? ` (${record.filename})` : '');
+        exportLink.href = `/api/conversions/${record.id}/export`;
+        NetMigrateDiff.render(diffView, record);
+        detailSection.classList.remove('hidden');
+        detailSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      } catch (err) {
+        // error banner already shown
+      }
+    }
+
+    async function deleteRecord(id) {
+      if (!window.confirm(`Delete conversion #${id}? This cannot be undone.`)) return;
+      try {
+        await NetMigrate.apiDelete(`/api/conversions/${id}`);
+        detailSection.classList.add('hidden');
+        loadPage();
+      } catch (err) {
+        // error banner already shown
+      }
+    }
+
+    prevBtn.addEventListener('click', () => {
+      offset = Math.max(0, offset - LIMIT);
+      loadPage();
+    });
+    nextBtn.addEventListener('click', () => {
+      if (lastPageSize < LIMIT) return;
+      offset += LIMIT;
+      loadPage();
+    });
+    closeBtn.addEventListener('click', () => detailSection.classList.add('hidden'));
+
+    loadPage();
+  });
+</script>
+{% endblock %}

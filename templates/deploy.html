@@ -1,0 +1,221 @@
+{% extends "base.html" %}
+
+{% block title %}Deploy &mdash; NetMigrate{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+  <h1 class="text-xl font-semibold">Simulated deployment</h1>
+  <p class="text-sm text-gray-500 dark:text-gray-400">
+    No SSH or real device connectivity is used. This is a timed simulation of
+    what a config push would log.
+  </p>
+
+  <div class="grid gap-4 sm:grid-cols-2">
+    <div>
+      <label for="deploy-device" class="block text-sm font-medium mb-1">Device</label>
+      <select id="deploy-device"
+              class="w-full rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-2 py-1.5 text-sm">
+        <option value="">Loading devices...</option>
+      </select>
+    </div>
+    <div>
+      <label for="deploy-conversion" class="block text-sm font-medium mb-1">Conversion</label>
+      <select id="deploy-conversion"
+              class="w-full rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-2 py-1.5 text-sm">
+        <option value="">Loading conversions...</option>
+      </select>
+    </div>
+  </div>
+
+  <div>
+    <label for="deploy-cli" class="block text-sm font-medium mb-1">
+      Command preview <span class="text-gray-400 font-normal">(editable, for review only)</span>
+    </label>
+    <textarea id="deploy-cli" rows="10" spellcheck="false"
+              placeholder="Select a conversion to preview its output..."
+              class="config-pre w-full rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-sm"></textarea>
+  </div>
+
+  <div class="flex flex-wrap items-center gap-4">
+    <button type="button" id="start-deploy-btn"
+            class="px-4 py-2 rounded bg-gray-900 text-white dark:bg-gray-100 dark:text-gray-900 text-sm font-medium hover:opacity-90 disabled:opacity-50">
+      Start deployment
+    </button>
+    <span id="deploy-status" class="text-sm text-gray-500 dark:text-gray-400"></span>
+    <button type="button" id="download-log-btn" disabled
+            class="ml-auto px-3 py-1.5 rounded border border-gray-300 dark:border-gray-600 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50">
+      Download log
+    </button>
+  </div>
+
+  <div class="flex flex-wrap items-center gap-4 text-sm">
+    <span class="font-medium">Show:</span>
+    {% for level in ['INFO', 'SUCCESS', 'COMMAND', 'WARNING', 'ERROR'] %}
+    <label class="flex items-center gap-1.5">
+      <input type="checkbox" class="level-filter rounded border-gray-300 dark:border-gray-600" value="{{ level }}" checked>
+      {{ level }}
+    </label>
+    {% endfor %}
+  </div>
+
+  <div id="deploy-log"
+       class="config-pre h-96 overflow-y-auto rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-3 text-xs space-y-0.5"></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script defer>
+  document.addEventListener('DOMContentLoaded', () => {
+    const deviceSelect = document.getElementById('deploy-device');
+    const conversionSelect = document.getElementById('deploy-conversion');
+    const cliBox = document.getElementById('deploy-cli');
+    const startBtn = document.getElementById('start-deploy-btn');
+    const statusEl = document.getElementById('deploy-status');
+    const downloadBtn = document.getElementById('download-log-btn');
+    const logContainer = document.getElementById('deploy-log');
+    const levelCheckboxes = Array.from(document.querySelectorAll('.level-filter'));
+
+    const LEVEL_CLASS = {
+      INFO: 'text-gray-600 dark:text-gray-300',
+      SUCCESS: 'text-green-700 dark:text-green-400',
+      COMMAND: 'text-blue-700 dark:text-blue-400',
+      WARNING: 'text-amber-700 dark:text-amber-400 font-semibold',
+      ERROR: 'text-red-700 dark:text-red-400 font-semibold',
+    };
+
+    let events = [];
+    let eventSource = null;
+
+    async function loadOptions() {
+      try {
+        const devices = await NetMigrate.apiGet('/api/devices');
+        deviceSelect.textContent = '';
+        if (devices.length === 0) {
+          deviceSelect.appendChild(new Option('No devices -- add one first', ''));
+        } else {
+          for (const device of devices) {
+            deviceSelect.appendChild(new Option(
+              `${device.hostname} (${device.ip_address || 'no IP'})`, device.id,
+            ));
+          }
+        }
+      } catch (err) {
+        deviceSelect.textContent = '';
+        deviceSelect.appendChild(new Option('Failed to load devices', ''));
+      }
+
+      try {
+        const conversions = await NetMigrate.apiGet('/api/conversions?limit=50');
+        conversionSelect.textContent = '';
+        if (conversions.length === 0) {
+          conversionSelect.appendChild(new Option('No conversions yet', ''));
+        } else {
+          for (const c of conversions) {
+            const label = `#${c.id} ${c.source_vendor}→${c.target_vendor}${c.filename ? ` (${c.filename})` : ''}`;
+            conversionSelect.appendChild(new Option(label, c.id));
+          }
+        }
+      } catch (err) {
+        conversionSelect.textContent = '';
+        conversionSelect.appendChild(new Option('Failed to load conversions', ''));
+      }
+    }
+
+    conversionSelect.addEventListener('change', async () => {
+      cliBox.value = '';
+      if (!conversionSelect.value) return;
+      try {
+        const record = await NetMigrate.apiGet(`/api/conversions/${conversionSelect.value}`);
+        cliBox.value = record.output_text;
+      } catch (err) {
+        // error banner already shown
+      }
+    });
+
+    function levelVisible(level) {
+      return levelCheckboxes.some((cb) => cb.value === level && cb.checked);
+    }
+
+    function renderLog() {
+      logContainer.textContent = '';
+      for (const event of events) {
+        if (!levelVisible(event.level)) continue;
+        const line = document.createElement('div');
+        line.className = LEVEL_CLASS[event.level] || '';
+        const time = event.ts ? event.ts.slice(11, 19) : '';
+        line.textContent = `[${time}] ${event.level.padEnd(7, ' ')} ${event.message}`;
+        logContainer.appendChild(line);
+      }
+      logContainer.scrollTop = logContainer.scrollHeight;
+    }
+
+    for (const cb of levelCheckboxes) cb.addEventListener('change', renderLog);
+
+    startBtn.addEventListener('click', () => {
+      const deviceId = deviceSelect.value;
+      const conversionId = conversionSelect.value;
+      if (!deviceId || !conversionId) {
+        NetMigrate.showError('Select both a device and a conversion first.');
+        return;
+      }
+
+      if (eventSource) eventSource.close();
+      events = [];
+      renderLog();
+      downloadBtn.disabled = true;
+      startBtn.disabled = true;
+      statusEl.textContent = 'Connecting...';
+
+      const url = `/api/deploy/stream?conversion_id=${encodeURIComponent(conversionId)}&device_id=${encodeURIComponent(deviceId)}`;
+      eventSource = new EventSource(url);
+
+      eventSource.onmessage = (message) => {
+        let event;
+        try {
+          event = JSON.parse(message.data);
+        } catch (err) {
+          return;
+        }
+        events.push(event);
+        renderLog();
+        statusEl.textContent = event.message;
+        if (event.done) {
+          eventSource.close();
+          eventSource = null;
+          startBtn.disabled = false;
+          downloadBtn.disabled = false;
+          statusEl.textContent = 'Deployment complete.';
+        }
+      };
+
+      eventSource.onerror = () => {
+        if (eventSource) {
+          eventSource.close();
+          eventSource = null;
+        }
+        startBtn.disabled = false;
+        downloadBtn.disabled = events.length === 0;
+        statusEl.textContent = 'Connection closed.';
+      };
+    });
+
+    downloadBtn.addEventListener('click', () => {
+      if (events.length === 0) return;
+      const text = events
+        .map((e) => `[${e.ts}] ${e.level.padEnd(7, ' ')} ${e.message}`)
+        .join('\n');
+      const blob = new Blob([text], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `deploy_${conversionSelect.value || 'log'}.log`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    });
+
+    loadOptions();
+  });
+</script>
+{% endblock %}

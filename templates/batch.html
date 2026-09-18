@@ -1,0 +1,245 @@
+{% extends "base.html" %}
+
+{% block title %}Batch &mdash; NetMigrate{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+  <h1 class="text-xl font-semibold">Batch conversion</h1>
+
+  <div id="drop-zone"
+       class="rounded border-2 border-dashed border-gray-300 dark:border-gray-600 px-6 py-10 text-center text-sm text-gray-500 dark:text-gray-400 cursor-pointer hover:border-gray-400 dark:hover:border-gray-500">
+    Drag &amp; drop <code class="config-pre">.cfg</code> / <code class="config-pre">.txt</code> / <code class="config-pre">.conf</code> files here, or click to browse.
+    <div class="text-xs mt-1">Up to 20 files, 1&nbsp;MB each.</div>
+    <input type="file" id="file-input" class="hidden" multiple accept=".cfg,.txt,.conf">
+  </div>
+
+  <div id="file-list-section" class="hidden space-y-2">
+    <h2 class="text-sm font-medium">Files to convert</h2>
+    <div class="overflow-x-auto border border-gray-200 dark:border-gray-700 rounded">
+      <table class="w-full text-sm">
+        <thead class="text-left text-gray-500 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700">
+          <tr>
+            <th class="py-1.5 px-3 font-medium">File</th>
+            <th class="py-1.5 px-3 font-medium">Source</th>
+            <th class="py-1.5 px-3 font-medium">Target</th>
+            <th class="py-1.5 px-3 font-medium"></th>
+          </tr>
+        </thead>
+        <tbody id="file-list-body"></tbody>
+      </table>
+    </div>
+
+    <div class="flex items-center gap-3">
+      <button type="button" id="convert-batch-btn"
+              class="px-4 py-2 rounded bg-gray-900 text-white dark:bg-gray-100 dark:text-gray-900 text-sm font-medium hover:opacity-90 disabled:opacity-50">
+        Convert batch
+      </button>
+      <span id="batch-status" class="text-sm text-gray-500 dark:text-gray-400"></span>
+    </div>
+  </div>
+
+  <section id="batch-results-section" class="hidden space-y-3">
+    <div class="flex items-center justify-between">
+      <h2 class="text-sm font-medium">Results</h2>
+      <button type="button" id="download-zip-btn"
+              class="px-3 py-1.5 rounded border border-gray-300 dark:border-gray-600 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 hidden">
+        Download ZIP
+      </button>
+    </div>
+    <div class="overflow-x-auto border border-gray-200 dark:border-gray-700 rounded">
+      <table class="w-full text-sm">
+        <thead class="text-left text-gray-500 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700">
+          <tr>
+            <th class="py-1.5 px-3 font-medium">File</th>
+            <th class="py-1.5 px-3 font-medium">Status</th>
+            <th class="py-1.5 px-3 font-medium">Rule coverage</th>
+            <th class="py-1.5 px-3 font-medium">Detail</th>
+          </tr>
+        </thead>
+        <tbody id="batch-results-body"></tbody>
+      </table>
+    </div>
+  </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script defer>
+  document.addEventListener('DOMContentLoaded', () => {
+    const dropZone = document.getElementById('drop-zone');
+    const fileInput = document.getElementById('file-input');
+    const fileListSection = document.getElementById('file-list-section');
+    const fileListBody = document.getElementById('file-list-body');
+    const convertBtn = document.getElementById('convert-batch-btn');
+    const statusEl = document.getElementById('batch-status');
+    const resultsSection = document.getElementById('batch-results-section');
+    const resultsBody = document.getElementById('batch-results-body');
+    const downloadZipBtn = document.getElementById('download-zip-btn');
+
+    // filename -> { file, sourceVendor, targetVendor }
+    const entries = new Map();
+    let currentBatchId = null;
+
+    function vendorSelect(kind, value) {
+      const select = document.createElement('select');
+      select.className = 'rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-2 py-1 text-sm';
+      select.dataset.kind = kind;
+      const options = kind === 'source'
+        ? [['auto', 'Auto-detect'], ['cisco', 'Cisco IOS-XE'], ['huawei', 'Huawei VRP']]
+        : [['huawei', 'Huawei VRP'], ['cisco', 'Cisco IOS-XE']];
+      for (const [val, label] of options) {
+        const opt = document.createElement('option');
+        opt.value = val;
+        opt.textContent = label;
+        if (val === value) opt.selected = true;
+        select.appendChild(opt);
+      }
+      return select;
+    }
+
+    function renderFileList() {
+      fileListBody.textContent = '';
+      for (const [name, entry] of entries) {
+        const tr = document.createElement('tr');
+        tr.className = 'border-b border-gray-100 dark:border-gray-800 last:border-0';
+
+        const nameCell = document.createElement('td');
+        nameCell.className = 'py-1.5 px-3 config-pre';
+        nameCell.textContent = `${name} (${(entry.file.size / 1024).toFixed(1)} KB)`;
+        tr.appendChild(nameCell);
+
+        const sourceCell = document.createElement('td');
+        sourceCell.className = 'py-1.5 px-3';
+        const sourceSel = vendorSelect('source', entry.sourceVendor);
+        sourceSel.addEventListener('change', () => { entry.sourceVendor = sourceSel.value; });
+        sourceCell.appendChild(sourceSel);
+        tr.appendChild(sourceCell);
+
+        const targetCell = document.createElement('td');
+        targetCell.className = 'py-1.5 px-3';
+        const targetSel = vendorSelect('target', entry.targetVendor);
+        targetSel.addEventListener('change', () => { entry.targetVendor = targetSel.value; });
+        targetCell.appendChild(targetSel);
+        tr.appendChild(targetCell);
+
+        const removeCell = document.createElement('td');
+        removeCell.className = 'py-1.5 px-3 text-right';
+        const removeBtn = document.createElement('button');
+        removeBtn.type = 'button';
+        removeBtn.className = 'text-red-600 dark:text-red-400 hover:underline text-sm';
+        removeBtn.textContent = 'Remove';
+        removeBtn.addEventListener('click', () => {
+          entries.delete(name);
+          renderFileList();
+        });
+        removeCell.appendChild(removeBtn);
+        tr.appendChild(removeCell);
+
+        fileListBody.appendChild(tr);
+      }
+      fileListSection.classList.toggle('hidden', entries.size === 0);
+    }
+
+    function addFiles(fileList) {
+      for (const file of fileList) {
+        const ext = file.name.slice(file.name.lastIndexOf('.')).toLowerCase();
+        if (!['.cfg', '.txt', '.conf'].includes(ext)) {
+          NetMigrate.showError(`${file.name}: unsupported extension '${ext}'`);
+          continue;
+        }
+        entries.set(file.name, { file, sourceVendor: 'auto', targetVendor: 'huawei' });
+      }
+      renderFileList();
+    }
+
+    dropZone.addEventListener('click', () => fileInput.click());
+    dropZone.addEventListener('dragover', (event) => {
+      event.preventDefault();
+      dropZone.classList.add('border-gray-500');
+    });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('border-gray-500'));
+    dropZone.addEventListener('drop', (event) => {
+      event.preventDefault();
+      dropZone.classList.remove('border-gray-500');
+      addFiles(event.dataTransfer.files);
+    });
+    fileInput.addEventListener('change', () => {
+      addFiles(fileInput.files);
+      fileInput.value = '';
+    });
+
+    function renderResults(results) {
+      resultsBody.textContent = '';
+      for (const entry of results) {
+        const tr = document.createElement('tr');
+        tr.className = 'border-b border-gray-100 dark:border-gray-800 last:border-0';
+
+        tr.appendChild(Object.assign(document.createElement('td'), {
+          className: 'py-1.5 px-3 config-pre', textContent: entry.filename,
+        }));
+
+        const statusCell = document.createElement('td');
+        statusCell.className = 'py-1.5 px-3';
+        const statusBadge = document.createElement('span');
+        statusBadge.className = entry.ok
+          ? 'text-green-700 dark:text-green-400'
+          : 'text-red-700 dark:text-red-400';
+        statusBadge.textContent = entry.ok ? 'OK' : 'Failed';
+        statusCell.appendChild(statusBadge);
+        tr.appendChild(statusCell);
+
+        tr.appendChild(Object.assign(document.createElement('td'), {
+          className: 'py-1.5 px-3',
+          textContent: entry.ok ? `${(entry.metrics.rule_coverage * 100).toFixed(1)}%` : '—',
+        }));
+
+        tr.appendChild(Object.assign(document.createElement('td'), {
+          className: 'py-1.5 px-3 text-gray-500 dark:text-gray-400',
+          textContent: entry.ok
+            ? `conversion #${entry.conversion_id}`
+            : entry.error,
+        }));
+
+        resultsBody.appendChild(tr);
+      }
+      resultsSection.classList.remove('hidden');
+    }
+
+    convertBtn.addEventListener('click', async () => {
+      if (entries.size === 0) return;
+      convertBtn.disabled = true;
+      statusEl.textContent = `Converting ${entries.size} file(s)...`;
+      downloadZipBtn.classList.add('hidden');
+      currentBatchId = null;
+
+      const formData = new FormData();
+      const options = {};
+      for (const [name, entry] of entries) {
+        formData.append('files', entry.file, name);
+        options[name] = { source_vendor: entry.sourceVendor, target_vendor: entry.targetVendor };
+      }
+      formData.append('options', JSON.stringify(options));
+
+      try {
+        const payload = await NetMigrate.apiUpload('/api/convert/batch', formData);
+        renderResults(payload.results);
+        const okCount = payload.results.filter((r) => r.ok).length;
+        statusEl.textContent = `${okCount}/${payload.results.length} converted successfully.`;
+        if (okCount > 0) {
+          currentBatchId = payload.batch_id;
+          downloadZipBtn.classList.remove('hidden');
+        }
+      } catch (err) {
+        statusEl.textContent = '';
+      } finally {
+        convertBtn.disabled = false;
+      }
+    });
+
+    downloadZipBtn.addEventListener('click', () => {
+      if (!currentBatchId) return;
+      window.location.href = `/api/batch/${currentBatchId}/zip`;
+    });
+  });
+</script>
+{% endblock %}

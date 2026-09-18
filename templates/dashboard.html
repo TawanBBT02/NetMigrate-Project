@@ -1,0 +1,219 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard &mdash; NetMigrate{% endblock %}
+
+{% block content %}
+<div class="space-y-8">
+  <h1 class="text-xl font-semibold">Dashboard</h1>
+
+  <div id="stat-cards" class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4"></div>
+
+  <div class="grid gap-6 lg:grid-cols-2">
+    <div class="rounded border border-gray-200 dark:border-gray-700 p-4">
+      <h2 class="text-sm font-medium mb-3">Conversions by direction</h2>
+      <div id="direction-chart"></div>
+    </div>
+    <div class="rounded border border-gray-200 dark:border-gray-700 p-4">
+      <h2 class="text-sm font-medium mb-3">Activity, last 14 days</h2>
+      <div id="activity-chart"></div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script defer>
+  document.addEventListener('DOMContentLoaded', () => {
+    const cardsEl = document.getElementById('stat-cards');
+    const directionEl = document.getElementById('direction-chart');
+    const activityEl = document.getElementById('activity-chart');
+
+    // Fixed categorical hues, assigned by identity (direction), never cycled.
+    // Validated for CVD/contrast with the dataviz skill's checker.
+    const DIRECTION_COLOR = {
+      'cisco->huawei': '#2563eb',
+      'huawei->cisco': '#d97706',
+    };
+    const FALLBACK_COLOR = '#6b7280';
+    const SEQUENTIAL_HUE = '#2563eb';
+
+    function svg(tag, attrs) {
+      const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+      for (const [key, value] of Object.entries(attrs || {})) {
+        el.setAttribute(key, value);
+      }
+      return el;
+    }
+
+    function renderCards(stats) {
+      cardsEl.textContent = '';
+      const cards = [
+        ['Total conversions', stats.total_conversions],
+        ['Rule coverage', `${(stats.rule_coverage * 100).toFixed(1)}%`],
+        ['Flagged for review', stats.flagged_for_review],
+        ['AI-suggested lines', stats.ai_lines],
+      ];
+      for (const [label, value] of cards) {
+        const card = document.createElement('div');
+        card.className = 'rounded border border-gray-200 dark:border-gray-700 p-4';
+        const valueEl = document.createElement('div');
+        valueEl.className = 'text-2xl font-semibold';
+        valueEl.textContent = String(value);
+        const labelEl = document.createElement('div');
+        labelEl.className = 'text-sm text-gray-500 dark:text-gray-400 mt-1';
+        labelEl.textContent = label;
+        card.appendChild(valueEl);
+        card.appendChild(labelEl);
+        cardsEl.appendChild(card);
+      }
+    }
+
+    // Horizontal bar chart, one bar per direction. Two categories at most in
+    // this project's scope (cisco->huawei, huawei->cisco), so each bar is
+    // direct-labeled and no separate legend box is needed.
+    function renderDirectionChart(byDirection) {
+      directionEl.textContent = '';
+      if (byDirection.length === 0) {
+        directionEl.textContent = 'No conversions yet.';
+        directionEl.className = 'text-sm text-gray-500 dark:text-gray-400';
+        return;
+      }
+
+      const width = 480;
+      const barHeight = 28;
+      const gap = 14;
+      const leftPad = 8;
+      const rightPad = 64;
+      const height = byDirection.length * (barHeight + gap) + gap;
+      const maxCount = Math.max(...byDirection.map((d) => d.count), 1);
+      const trackWidth = width - leftPad - rightPad;
+
+      const root = svg('svg', {
+        viewBox: `0 0 ${width} ${height}`, width: '100%', height,
+        role: 'img', 'aria-label': 'Conversions grouped by source-to-target direction',
+      });
+
+      byDirection.forEach((entry, i) => {
+        const y = gap + i * (barHeight + gap);
+        const barWidth = Math.max((entry.count / maxCount) * trackWidth, 4);
+        const color = DIRECTION_COLOR[entry.direction] || FALLBACK_COLOR;
+
+        root.appendChild(svg('rect', {
+          x: leftPad, y, width: trackWidth, height: barHeight,
+          rx: 4, fill: 'currentColor', class: 'text-gray-100 dark:text-gray-800',
+        }));
+        const bar = svg('rect', {
+          x: leftPad, y, width: barWidth, height: barHeight, rx: 4, fill: color,
+        });
+        bar.appendChild(svg('title', {})).textContent = `${entry.direction}: ${entry.count}`;
+        root.appendChild(bar);
+
+        const label = svg('text', {
+          x: leftPad + 8, y: y + barHeight / 2, dy: '0.35em',
+          fill: '#ffffff', 'font-size': 12, 'font-weight': 600,
+        });
+        label.textContent = entry.direction;
+        if (barWidth < 90) {
+          label.setAttribute('x', leftPad + barWidth + 8);
+          label.setAttribute('fill', 'currentColor');
+          label.setAttribute('class', 'text-gray-700 dark:text-gray-200');
+        }
+        root.appendChild(label);
+
+        const countLabel = svg('text', {
+          x: width - rightPad + 10, y: y + barHeight / 2, dy: '0.35em',
+          'font-size': 12, 'font-weight': 600,
+          fill: 'currentColor', class: 'text-gray-700 dark:text-gray-200',
+        });
+        countLabel.textContent = String(entry.count);
+        root.appendChild(countLabel);
+      });
+
+      directionEl.appendChild(root);
+    }
+
+    // Vertical bar chart over a fixed 14-day window (today inclusive), zero-
+    // filled for days with no conversions -- the API only returns days that
+    // have at least one row, so the continuous axis is built here.
+    function renderActivityChart(recent) {
+      activityEl.textContent = '';
+      const countByDate = new Map(recent.map((r) => [r.date, r.count]));
+      const days = [];
+      const today = new Date();
+      for (let i = 13; i >= 0; i--) {
+        const d = new Date(today);
+        d.setUTCDate(d.getUTCDate() - i);
+        const iso = d.toISOString().slice(0, 10);
+        days.push({ date: iso, count: countByDate.get(iso) || 0 });
+      }
+
+      const width = 480;
+      const height = 180;
+      const leftPad = 8;
+      const rightPad = 8;
+      const topPad = 10;
+      const bottomPad = 24;
+      const plotHeight = height - topPad - bottomPad;
+      const plotWidth = width - leftPad - rightPad;
+      const maxCount = Math.max(...days.map((d) => d.count), 1);
+      const barGap = 4;
+      const barWidth = (plotWidth - barGap * (days.length - 1)) / days.length;
+
+      const root = svg('svg', {
+        viewBox: `0 0 ${width} ${height}`, width: '100%', height,
+        role: 'img', 'aria-label': 'Conversion count for each of the last 14 days',
+      });
+
+      // Baseline.
+      root.appendChild(svg('line', {
+        x1: leftPad, x2: width - rightPad, y1: topPad + plotHeight, y2: topPad + plotHeight,
+        stroke: 'currentColor', class: 'text-gray-300 dark:text-gray-600', 'stroke-width': 1,
+      }));
+
+      days.forEach((day, i) => {
+        const x = leftPad + i * (barWidth + barGap);
+        const barHeight = Math.max((day.count / maxCount) * plotHeight, day.count > 0 ? 3 : 0);
+        const y = topPad + plotHeight - barHeight;
+
+        if (day.count > 0) {
+          const bar = svg('rect', {
+            x, y, width: barWidth, height: barHeight, rx: 3, fill: SEQUENTIAL_HUE,
+          });
+          bar.appendChild(svg('title', {})).textContent = `${day.date}: ${day.count}`;
+          root.appendChild(bar);
+        } else {
+          root.appendChild(svg('rect', {
+            x, y: topPad + plotHeight - 2, width: barWidth, height: 2, rx: 1,
+            fill: 'currentColor', class: 'text-gray-300 dark:text-gray-600',
+          }));
+        }
+
+        // Label every other day so 14 labels don't collide.
+        if (i % 2 === 0) {
+          const label = svg('text', {
+            x: x + barWidth / 2, y: height - 6, 'text-anchor': 'middle',
+            'font-size': 9, fill: 'currentColor', class: 'text-gray-400 dark:text-gray-500',
+          });
+          label.textContent = day.date.slice(5);
+          root.appendChild(label);
+        }
+      });
+
+      activityEl.appendChild(root);
+    }
+
+    async function load() {
+      try {
+        const stats = await NetMigrate.apiGet('/api/stats');
+        renderCards(stats);
+        renderDirectionChart(stats.by_direction);
+        renderActivityChart(stats.recent);
+      } catch (err) {
+        // error banner already shown by apiGet
+      }
+    }
+
+    load();
+  });
+</script>
+{% endblock %}

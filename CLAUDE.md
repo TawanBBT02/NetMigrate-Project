@@ -4,251 +4,291 @@ Bi-directional network configuration translator: **Cisco IOS-XE ↔ Huawei VRP**
 Senior special project (ปริญญานิพนธ์), two students. **Hard deadline 30 Sep 2026.**
 
 Read this file before changing anything. The decisions below were made
-deliberately, several of them after finding that the obvious approach fails.
-If a change would contradict something here, say so and ask rather than
-proceeding.
+deliberately, several after finding that the obvious approach fails. If a
+change would contradict something here, say so and ask rather than proceeding.
+
+**Current phase: the engine is FROZEN. Only the web layer is under
+construction.** Do not modify anything under `netmigrate/` except new files
+you are explicitly told to create.
 
 ---
 
-## 1. Architecture — do not change without discussion
+## 1. Status — 20 Sep 2026
+
+**Engine — complete and frozen:**
 
 ```
-source text → block-aware parser → vendor-neutral IR → renderer → target text
+netmigrate/
+  ir.py             IR dataclasses + ConversionResult (THE API CONTRACT)
+  blocks.py         block-aware parser (structure only)
+  transforms.py     class-T functions: VLAN lists, area IDs, masks, if names
+  engine.py         registry + convert() entry point
+  validation.py     ir_diff, round_trip, check_golden, benchmark_convert
+  rules_cisco.py    Cisco text -> IR
+  rules_huawei.py   Huawei text -> IR
+  render_cisco.py   IR -> Cisco text
+  render_huawei.py  IR -> Huawei text
+  ai_fallback.py    bounded LLM suggestions, credential-excluded
+  rule_catalog.py   rule metadata; source of Appendix A
 ```
 
-**This is NOT line-by-line regex substitution.** That approach was considered
-and rejected, because OSPF cannot be expressed with it:
+**Web layer — built against the frozen contract, still open to change within
+section 5's scope:**
 
 ```
-! Cisco                          # Huawei
-router ospf 1                    ospf 1 router-id 1.1.1.1
- router-id 1.1.1.1                area 0.0.0.0
- network 10.0.0.0 0.0.0.255 area 0   network 10.0.0.0 0.0.0.255
- network 172.16.0.0 0.0.0.255 area 1  area 0.0.0.1
-                                      network 172.16.0.0 0.0.0.255
+netmigrate/
+  persistence.py    SQLite schema + data access (no FastAPI imports)
+  api.py            FastAPI app; every /api/* endpoint in section 3 below
+  deploy_sim.py      simulated deployment log generator (SSE payloads)
+templates/          base.html, index.html, batch.html, devices.html,
+                    deploy.html, dashboard.html, history.html, settings.html
+static/             app.js (fetch helpers, theme toggle), diff.js (diff view)
 ```
 
-Three things happen at once: `router-id` promotes onto the process line,
-areas become parent blocks requiring networks to be regrouped, and area IDs
-convert between integer and dotted-decimal. Output cannot begin until the
-whole block has been read. The IR exists for this reason.
+**Known gap:** `api.py` mounts `/api/*` only — there is no `Jinja2Templates`
+/ `StaticFiles` wiring yet, so none of the page routes (`/`, `/batch`,
+`/devices`, `/deploy`, `/dashboard`, `/history`, `/settings`) are actually
+served. The templates above exist and are correct against the spec, but
+nothing renders them until that wiring is added. This is the next task.
 
-Adding a vendor means writing one parser and one renderer — *n* + *n*
-components, not *n*² pairwise mappings. This is what makes the future-work
-claim of additional vendor support credible.
+**240 tests passing across 11 suites (196 engine + 44 web layer:
+`test_persistence` 12, `test_api` 19, `test_deploy_sim` 13). Do not let this
+number go down.**
 
-### Rule classification
+```bash
+python tools/run_tests.py          # or: pytest -v
+python tools/evaluate.py           # corpus evaluation -> Chapter 4 data
+```
 
-Every rule is **D**, **T**, or **S**:
+**Not built yet — this is the remaining work:**
 
-| Class | Meaning | Example |
-|---|---|---|
-| D | direct 1:1 substitution | `hostname` ↔ `sysname`, `no` ↔ `undo` |
-| T | 1:1 line, argument reformatted | VLAN lists, route preference |
-| S | block nesting or ordering changes | OSPF |
-
-`docs/netmigrate-mapping-spec.md` is the authoritative rule table. When
-implementing a rule, follow the spec; if the spec looks wrong, flag it rather
-than silently diverging.
+- Page-route wiring (see "Known gap" above)
 
 ---
 
-## 2. Hard rules — violations are bugs
+## 2. Architecture — do not change
 
-1. **Single Python runtime.** No Node.js. Python 3.11+.
-2. **SQLite for persistence**, never in-memory. An audit history that dies on
-   restart is not an audit history.
-3. **AI fallback fires ONLY when the parser emits an `UnmappedBlock`.** Never
-   merely because an API key exists. If AI ran on every conversion, the
-   rule-coverage metric would be meaningless.
+```
+source text -> block-aware parser -> vendor-neutral IR -> renderer -> target text
+```
+
+**NOT line-by-line regex.** That was considered and rejected: OSPF cannot be
+expressed with it. `router-id` promotes onto the process line, areas become
+parent blocks requiring networks to be regrouped, and area IDs convert
+integer <-> dotted-decimal. Output cannot begin until the whole block is read.
+Structural rules are **25% of the rule set** — higher than first estimated.
+
+Adding a vendor = one parser + one renderer (n + n, not n squared).
+
+Rules are classified **D** (direct, 56%), **T** (transform, 19%),
+**S** (structural, 25%). `docs/netmigrate-mapping-spec.md` and
+`netmigrate/rule_catalog.py` are authoritative.
+
+---
+
+## 3. Hard rules — violations are bugs
+
+1. **Single Python runtime.** No Node. Python 3.11+.
+2. **SQLite for persistence**, never in-memory.
+3. **AI fallback fires ONLY when the parser emits an `UnmappedBlock`** — never
+   merely because an API key exists. Otherwise the coverage metric measures
+   nothing.
 4. **AI output is NEVER written into the uncommented config body.** Always a
-   commented suggestion with `[NETMIGRATE-AI-REVIEW]`. There is a test for
-   this (`test_ai_output_never_uncommented`) — do not weaken it.
-5. **Model self-reported confidence is displayed but excluded from all
+   commented suggestion tagged `[NETMIGRATE-AI-REVIEW]`.
+5. **Credential lines are never sent to the AI API** and never converted.
+   Password hashes are one-way and vendor-specific. They get deterministic
+   manual-entry guidance instead.
+6. **Model self-reported confidence is displayed but excluded from all
    metrics.** It is not a validated reliability measure.
-6. **Never drop an unrecognised line silently.** It goes to `cfg.unmapped`
+7. **Never drop an unrecognised line silently.** It goes to `cfg.unmapped`
    and is emitted as a commented review tag using the *target* vendor's
-   comment marker. Silent loss is the failure mode this whole design exists
-   to prevent.
-7. **`admin_down` is tri-state.** `None` means the source config was silent —
-   emit nothing. Do not infer platform defaults. (Cisco switchports default
-   up, Cisco router ports default down, Huawei ports default up — they are
-   not the same, so guessing is wrong.)
-8. **Interface type is translated; the numeric portion is preserved
-   verbatim.** Port numbering reflects physical hardware and has no lossless
-   algorithmic mapping. Non-zero slot in slash notation → emit a review
-   warning. Logical interfaces (Loopback, Vlanif, Eth-Trunk) are exempt:
-   `Vlanif10` is VLAN 10, not slot 10.
-9. **Coverage is measured SOURCE-side**, not output-side:
-   `rule_lines = significant_lines - len(cfg.unmapped)`.
-   Output-side counting is wrong because OSPF turns 3 lines into 4 and
-   `vlan 10,20` turns 1 line into 2 blocks — the ratio could exceed 100%.
-10. **`Provenance.GENERATED`** is for renderer-created lines (`#`/`!`
-    separators, `end`/`return`) that map to no source line. Excluded from all
-    metrics.
+   comment marker.
+8. **`admin_down` is tri-state.** `None` = source was silent; emit nothing.
+   Vendor defaults differ, so inferring is wrong.
+9. **Interface type is translated; the numeric portion is preserved
+   verbatim.** Non-zero slot in slash notation -> review warning. Logical
+   interfaces (LoopBack, Vlanif, Eth-Trunk) exempt: `Vlanif10` is VLAN 10.
+10. **Coverage is measured SOURCE-side:**
+    `rule_lines = significant_lines - len(cfg.unmapped)`.
+    Output-side counting can exceed 100% because OSPF turns 3 lines into 4.
+11. **`Provenance.GENERATED`** is for renderer-created lines (`#`/`!`
+    separators, `end`/`return`). Excluded from all metrics.
+12. **VLAN lists split at 40 elements** per `allow-pass` command (VRP
+    `&<1-40>`); a range counts as one element.
+
+### Tests that enforce safety invariants — never weaken these
+
+| Invariant | Test |
+|---|---|
+| AI output never uncommented | `test_ai_output_never_uncommented` |
+| Credentials never uncommented | `test_credential_never_appears_uncommented` |
+| Credentials never sent to API | `test_credentials_are_never_sent` |
+| AI never inflates coverage | `test_coverage_unchanged_by_fallback` |
+| Catalog matches code | `test_every_code_rule_is_catalogued` |
 
 ---
 
-## 3. Scope — locked
+## 4. THE API CONTRACT — read before writing any web code
 
-### In scope
-System identity, comments, VLAN create/name, interface description /
-IP / admin state / type naming, switchport access and trunk, static routes,
-single-process OSPFv2 IPv4.
+`ConversionResult.to_dict()` in `netmigrate/ir.py` is the only interface
+between the engine and the web layer. **The web layer must not import or
+touch the IR dataclasses directly.**
 
-### Modules
-| # | Module | Owner |
-|---|---|---|
-| 1 | Single file conversion + diff view + per-line provenance | วัชรากร |
-| 2 | Batch conversion + ZIP | วรานนท์ |
-| 3 | Device inventory (records only, no connectivity test) | วรานนท์ |
-| 4 | Simulated deployment (SSE log stream) | วรานนท์ |
-| 5 | Dashboard + audit history | วรานนท์ |
-| 6 | Settings: `/api/health`, light/dark theme | วรานนท์ |
+```json
+{
+  "source_vendor": "cisco_iosxe",
+  "target_vendor": "huawei_vrp",
+  "source_text": "...",
+  "output_text": "...",
+  "lines": [
+    {
+      "text": " port link-type access",
+      "provenance": "RULE",
+      "source_line": 7,
+      "rule_id": "port.link-type",
+      "needs_review": false
+    }
+  ],
+  "metrics": {
+    "total_lines": 33,
+    "significant_lines": 22,
+    "rule_lines": 21,
+    "ai_lines": 0,
+    "unmapped_lines": 1,
+    "rule_coverage": 0.9545,
+    "duration_ms": 0.1312
+  }
+}
+```
+
+`provenance` is one of `RULE`, `AI`, `UNMAPPED`, `GENERATED`.
+`source_line` and `rule_id` may be null.
+
+Engine entry point:
+
+```python
+from netmigrate.engine import convert
+from netmigrate.ir import Vendor
+from netmigrate.ai_fallback import make_fallback
+
+result = convert(text, Vendor.CISCO, Vendor.HUAWEI,
+                 ai_fallback=make_fallback(Vendor.HUAWEI))
+payload = result.to_dict()
+```
+
+`make_fallback()` returns `None` when no API key is set, and `convert()`
+accepts `None` — so the system works with no key configured.
+
+**Changing the shape of this dict breaks the frontend. Flag it, never do it
+silently.**
+
+---
+
+## 5. Web layer scope — 6 modules
+
+| # | Module | Endpoints | Page |
+|---|---|---|---|
+| 1 | Single conversion + diff view | `POST /api/convert` | `/` |
+| 2 | Batch conversion + ZIP | `POST /api/convert/batch`, `GET /api/batch/{id}/zip` | `/batch` |
+| 3 | Device inventory (records only) | `GET/POST/PUT/DELETE /api/devices` | `/devices` |
+| 4 | Simulated deployment (SSE) | `GET /api/deploy/stream` | `/deploy` |
+| 5 | Dashboard + audit history | `GET /api/stats`, `GET /api/conversions`, `GET /api/conversions/{id}` | `/dashboard`, `/history` |
+| 6 | Settings | `GET /api/health` | `/settings` |
+
+Full specification: **`docs/web-layer-spec.md`**. Follow it.
 
 ### Explicitly OUT of scope — do not implement
-- SSH / Netmiko / Paramiko / any real device connectivity
-- Bilingual Thai/English UI (cut: high cost, no academic value)
-- Simulated ping / SSH connectivity testing
+- SSH / Netmiko / Paramiko / any real device connectivity. Module 4 is
+  simulated with timers only.
+- Simulated ping / SSH connectivity testing in the inventory
+- Bilingual Thai/English UI (cut: high cost, no academic value).
+  Light/dark theme is kept — it is cheap.
 - ACL, QoS, BGP, IS-IS, VRF, OSPFv3, multi-process OSPF, IPv6
 - Multi-user auth / roles
 
-If asked to add any of these, refuse and point at this section. They belong
-in Chapter 5 Future Work.
+If asked to add any of these, refuse and point here. They belong in
+Chapter 5 Future Work.
 
 ---
 
-## 4. Deliberate rejections — not bugs
-
-These constructs go to `unmapped` **on purpose**. Do not "fix" them.
+## 6. Deliberate rejections — not bugs, do not "fix"
 
 | Construct | Why |
 |---|---|
 | `port trunk allow-pass vlan all` | not expressible as an explicit Cisco list in scope |
 | `port link-type hybrid` | no Cisco equivalent in scope |
-| `ip route-static ... 150` (no `preference` keyword) | invalid VRP syntax; keyword required |
+| `ip route-static ... 150` (no `preference`) | invalid VRP syntax; keyword required |
 | `ip route ... name BACKUP` | would silently discard the name |
 | `vlan 10,20` + `name X` | a name cannot apply to several VLANs |
-| unknown interface types (Serial, Tunnel, ATM) | out of scope |
+| credential lines | one-way hashes; no conversion exists |
+| Serial / Tunnel / ATM interfaces | out of scope |
 
-## 5. Documented normalisations — semantically lossless
+## 7. Documented normalisations — semantically lossless
 
-Round-trip output differs textually from the input in these two cases. Both
-are correct. Each has a named test.
-
-1. `vlan batch 10 20 30` expands into individual `vlan` blocks and does not
+1. `vlan batch 10 20 30` expands to individual `vlan` blocks; does not
    reconstitute as `batch`.
 2. `ip address 10.0.0.1 24` normalises to `255.255.255.0` and stays dotted.
 
-This is why **round-trip fidelity is measured on the IR, not the text.**
-Comment markers change, separators regenerate, block order is a renderer
-choice — none of that is data loss. `_comparable()` in `validation.py`
-excludes `source_line` (line numbers necessarily shift) and `unmapped`
-(unconvertible lines survive as comments, which do not parse back; that loss
-is already counted by the unmapped metric and must not be double-penalised).
+**Round-trip fidelity is measured on the IR, not the text.** Comment markers
+change, separators regenerate, block order is a renderer choice — none of
+that is data loss. `_comparable()` in `validation.py` excludes `source_line`
+and `unmapped` (the latter is already counted by the unmapped metric;
+counting it twice would double-penalise one limitation).
+
+## 8. Semantic findings for Chapter 5
+
+- **Static route defaults diverge:** Cisco AD 1, VRP preference 60. An
+  unqualified static route translates perfectly but lands with different
+  precedence. Both renderers emit one warning per config.
+- **Credentials are fundamentally non-translatable** (one-way,
+  vendor-specific hash algorithms).
 
 ---
 
-## 6. Evaluation — hypotheses being tested
+## 9. Evaluation
 
-| # | Hypothesis | Target |
-|---|---|---|
-| H1 | rule coverage on in-scope corpus | ≥ 85% of significant lines |
-| H2 | round-trip fidelity (class D and T) | ≥ 95% |
-| H3 | output loads in eNSP / Packet Tracer without syntax error | ≥ 90% of sampled files |
-| H4 | conversion time vs timed manual baseline | ≥ 80% reduction |
-| H5 | AI suggestion correctness on expert review | **no target — reported as found** |
+| # | Hypothesis | Target | Current |
+|---|---|---|---|
+| H1a | in-scope coverage | >= 95% | **100.0%** |
+| H1b | corpus coverage | reported | **83.7%** |
+| H2 | round-trip fidelity | >= 95% | **100.0%** |
+| H3a | Packet Tracer load | >= 90% | pending |
+| H3b | documentation conformance | reported | **83%** (19/23) |
+| H4 | time vs manual baseline | >= 80% | pending baseline |
+| H5 | AI suggestion accuracy | no target | pending |
 
-H5 deliberately has no target. A low figure is a valid result and supports
-the decision to flag rather than apply.
-
-Never claim "0% error rate." That was in an earlier draft and is circular
-reasoning: the engine is correct by definition for cases we wrote rules for.
-
-`python tools/evaluate.py --csv results.csv` generates the Chapter 4 table.
-The `simulator_load` column is filled in by hand.
+**Never claim "0% error rate."** It is circular: the engine is correct by
+definition for cases we wrote rules for.
 
 ---
 
-## 7. Testing discipline
+## 10. Freeze dates
 
-- **pytest.** Every rule gets a unit test.
-- **Write the test before the rule.** The suite is the evidence base for
-  Chapter 4.
-- **Never weaken a test to make code pass.** If a test fails, either the code
-  is wrong or the test encodes a wrong belief — decide which and say so.
-- A passing suite proves the code matches *our beliefs*, not that the beliefs
-  are right. Mapping correctness is validated in eNSP / Packet Tracer and
-  against vendor documentation, not by tests.
+- **20 Sep — RULE FREEZE (passed).** No new translation rules. Discoveries
+  go to Chapter 5 Future Work.
+- **24 Sep — FEATURE FREEZE.** All effort moves to evaluation and writing,
+  regardless of completeness. Missing this is the one unrecoverable failure:
+  a thinner system with a real Chapter 4 passes; a complete system with no
+  evaluation data does not.
 
-Current state: **121 tests passing.** Do not let this number go down.
+## 11. Division of labour
 
-```bash
-pytest -v
-python tools/evaluate.py
-```
+- วัชรากร: engine (complete), AI fallback, unit tests
+- วรานนท์: web layer, UI, persistence
+- Contract: `ConversionResult.to_dict()`
 
----
+## 12. Working preferences
 
-## 8. File map
-
-```
-netmigrate/
-  ir.py            IR dataclasses + ConversionResult (the API contract)
-  blocks.py        block-aware parser (structure only, no command meaning)
-  transforms.py    pure class-T functions: VLAN lists, area IDs, masks, if names
-  engine.py        registry + convert() entry point
-  validation.py    ir_diff, round_trip, check_golden
-  rules_cisco.py   Cisco text → IR
-  rules_huawei.py  Huawei text → IR
-  render_cisco.py  IR → Cisco text
-  render_huawei.py IR → Huawei text
-tests/             test_core, test_rules_cisco, test_roundtrip, test_validation
-tools/evaluate.py  corpus runner → Chapter 4 CSV
-corpus/            cisco/, huawei/, expected/
-docs/              netmigrate-mapping-spec.md, TK01-revised.md
-```
-
-**`ConversionResult.to_dict()` in `ir.py` is the contract between the engine
-and the web layer.** The web layer must not touch the dataclasses directly,
-so the internal model stays free to change. Changing that dict's shape breaks
-วรานนท์'s frontend — flag it before doing so.
-
----
-
-## 9. Status and next steps
-
-**Done:** IR, block parser, transforms, both parsers, both renderers,
-validation harness, evaluation runner, 3 corpus files. Both directions
-convert; round trip passes.
-
-**Next, in order:**
-1. Golden files — save current output to `corpus/expected/`, add a test
-2. AI fallback (`netmigrate/ai_fallback.py`) — suggest-and-flag only
-3. Hand the engine to วรานนท์; he builds against `to_dict()`
-4. Grow the corpus to 15–30 files, including configs **not** designed around
-   our rules — current coverage numbers are not yet evidence
-5. eNSP / Packet Tracer validation for H3
-
-**Freeze dates — these control the outcome:**
-- **20 Sep: rule freeze.** No new rules after this. Anything discovered later
-  goes to Future Work.
-- **24 Sep: feature freeze.** All remaining effort moves to evaluation and
-  writing, regardless of feature completeness. Missing this date is the one
-  unrecoverable failure: a system with fewer features and a real Chapter 4
-  passes; a feature-complete system with no evaluation data does not.
-
----
-
-## 10. Working preferences
-
-- Explain *why*, in comments, where a decision is non-obvious. Several
-  comments in this codebase exist to be quoted in Chapter 3.
-- Do not add dependencies. Almost everything needed is in the standard
-  library (`sqlite3`, `difflib`, `zipfile`, `ipaddress`). Current external
-  deps: fastapi, uvicorn, jinja2, python-multipart, google-genai, pytest.
-- Do not pin a Gemini model version in documentation or prose — model
-  versions deprecate faster than the thesis lifecycle. Keep it in config.
-- The student must be able to explain every line on 30 Sep. After writing a
+- Explain *why* in comments where a decision is non-obvious. Several comments
+  in this codebase exist to be quoted in Chapter 3.
+- **Do not add dependencies.** `sqlite3`, `difflib`, `zipfile`, `ipaddress`
+  are standard library. Current external deps: fastapi, uvicorn, jinja2,
+  python-multipart, google-genai, pytest.
+- No `localStorage` except for the theme toggle.
+- Do not pin a Gemini model version in code or prose; it lives in config
+  (`NETMIGRATE_GEMINI_MODEL`).
+- Every new module gets tests. Run `python tools/run_tests.py` before
+  reporting done.
+- The students must be able to explain every line on 30 Sep. After writing a
   non-trivial function, explain the reasoning back rather than just reporting
   that tests pass.

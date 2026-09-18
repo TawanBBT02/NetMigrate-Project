@@ -1,0 +1,302 @@
+{% extends "base.html" %}
+
+{% block title %}Devices &mdash; NetMigrate{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+  <div class="flex items-center justify-between">
+    <h1 class="text-xl font-semibold">Device inventory</h1>
+    <button type="button" id="add-device-btn"
+            class="px-3 py-1.5 rounded bg-gray-900 text-white dark:bg-gray-100 dark:text-gray-900 text-sm font-medium hover:opacity-90">
+      + Add device
+    </button>
+  </div>
+
+  <p class="text-sm text-gray-500 dark:text-gray-400">
+    Records only &mdash; no connectivity or SSH testing is performed against these devices.
+  </p>
+
+  <form id="filter-form" class="flex flex-wrap items-end gap-3">
+    <div>
+      <label for="filter-q" class="block text-xs font-medium mb-1">Search</label>
+      <input type="text" id="filter-q" placeholder="hostname or IP"
+             class="rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-2 py-1.5 text-sm">
+    </div>
+    <div>
+      <label for="filter-vendor" class="block text-xs font-medium mb-1">Vendor</label>
+      <input type="text" id="filter-vendor" list="vendor-options" placeholder="any"
+             class="rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-2 py-1.5 text-sm">
+    </div>
+    <div>
+      <label for="filter-location" class="block text-xs font-medium mb-1">Location</label>
+      <input type="text" id="filter-location" placeholder="any"
+             class="rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-2 py-1.5 text-sm">
+    </div>
+    <button type="submit"
+            class="px-3 py-1.5 rounded border border-gray-300 dark:border-gray-600 text-sm hover:bg-gray-100 dark:hover:bg-gray-700">
+      Search
+    </button>
+    <button type="button" id="clear-filter-btn"
+            class="px-3 py-1.5 text-sm text-gray-500 dark:text-gray-400 hover:underline">
+      Clear
+    </button>
+  </form>
+
+  <datalist id="vendor-options">
+    <option value="cisco_iosxe">
+    <option value="huawei_vrp">
+  </datalist>
+
+  <section id="device-form-section" class="hidden rounded border border-gray-200 dark:border-gray-700 p-4 space-y-4">
+    <h2 id="device-form-title" class="text-sm font-medium">Add device</h2>
+    <form id="device-form" class="grid gap-4 sm:grid-cols-3">
+      <input type="hidden" id="device-id" value="">
+      <div>
+        <label for="device-hostname" class="block text-sm font-medium mb-1">Hostname *</label>
+        <input type="text" id="device-hostname" required
+               class="w-full rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-2 py-1.5 text-sm">
+      </div>
+      <div>
+        <label for="device-ip" class="block text-sm font-medium mb-1">IP address</label>
+        <input type="text" id="device-ip" placeholder="10.0.0.1"
+               class="w-full rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-2 py-1.5 text-sm">
+      </div>
+      <div>
+        <label for="device-vendor" class="block text-sm font-medium mb-1">Vendor</label>
+        <input type="text" id="device-vendor" list="vendor-options"
+               class="w-full rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-2 py-1.5 text-sm">
+      </div>
+      <div>
+        <label for="device-os" class="block text-sm font-medium mb-1">OS version</label>
+        <input type="text" id="device-os"
+               class="w-full rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-2 py-1.5 text-sm">
+      </div>
+      <div>
+        <label for="device-port" class="block text-sm font-medium mb-1">SSH port</label>
+        <input type="number" id="device-port" value="22" min="1" max="65535"
+               class="w-full rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-2 py-1.5 text-sm">
+      </div>
+      <div>
+        <label for="device-location" class="block text-sm font-medium mb-1">Location</label>
+        <input type="text" id="device-location"
+               class="w-full rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-2 py-1.5 text-sm">
+      </div>
+      <div>
+        <label for="device-status" class="block text-sm font-medium mb-1">Status</label>
+        <select id="device-status"
+                class="w-full rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-2 py-1.5 text-sm">
+          <option value="unknown" selected>Unknown</option>
+          <option value="active">Active</option>
+          <option value="inactive">Inactive</option>
+          <option value="maintenance">Maintenance</option>
+        </select>
+      </div>
+      <div class="sm:col-span-3">
+        <label for="device-notes" class="block text-sm font-medium mb-1">Notes</label>
+        <textarea id="device-notes" rows="2"
+                  class="w-full rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-2 py-1.5 text-sm"></textarea>
+      </div>
+      <div class="sm:col-span-3 flex items-center gap-3">
+        <button type="submit" id="device-save-btn"
+                class="px-4 py-2 rounded bg-gray-900 text-white dark:bg-gray-100 dark:text-gray-900 text-sm font-medium hover:opacity-90">
+          Save
+        </button>
+        <button type="button" id="device-cancel-btn"
+                class="px-4 py-2 rounded border border-gray-300 dark:border-gray-600 text-sm hover:bg-gray-100 dark:hover:bg-gray-700">
+          Cancel
+        </button>
+      </div>
+    </form>
+  </section>
+
+  <div class="overflow-x-auto border border-gray-200 dark:border-gray-700 rounded">
+    <table class="w-full text-sm">
+      <thead class="text-left text-gray-500 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700">
+        <tr>
+          <th class="py-1.5 px-3 font-medium">Hostname</th>
+          <th class="py-1.5 px-3 font-medium">IP address</th>
+          <th class="py-1.5 px-3 font-medium">Vendor</th>
+          <th class="py-1.5 px-3 font-medium">OS version</th>
+          <th class="py-1.5 px-3 font-medium">Port</th>
+          <th class="py-1.5 px-3 font-medium">Location</th>
+          <th class="py-1.5 px-3 font-medium">Status</th>
+          <th class="py-1.5 px-3 font-medium"></th>
+        </tr>
+      </thead>
+      <tbody id="device-table-body"></tbody>
+    </table>
+    <p id="device-empty" class="hidden px-3 py-4 text-sm text-gray-500 dark:text-gray-400">
+      No devices match this filter.
+    </p>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script defer>
+  document.addEventListener('DOMContentLoaded', () => {
+    const filterForm = document.getElementById('filter-form');
+    const filterQ = document.getElementById('filter-q');
+    const filterVendor = document.getElementById('filter-vendor');
+    const filterLocation = document.getElementById('filter-location');
+    const clearFilterBtn = document.getElementById('clear-filter-btn');
+
+    const addBtn = document.getElementById('add-device-btn');
+    const formSection = document.getElementById('device-form-section');
+    const formTitle = document.getElementById('device-form-title');
+    const form = document.getElementById('device-form');
+    const cancelBtn = document.getElementById('device-cancel-btn');
+
+    const idField = document.getElementById('device-id');
+    const hostnameField = document.getElementById('device-hostname');
+    const ipField = document.getElementById('device-ip');
+    const vendorField = document.getElementById('device-vendor');
+    const osField = document.getElementById('device-os');
+    const portField = document.getElementById('device-port');
+    const locationField = document.getElementById('device-location');
+    const statusField = document.getElementById('device-status');
+    const notesField = document.getElementById('device-notes');
+
+    const tableBody = document.getElementById('device-table-body');
+    const emptyMsg = document.getElementById('device-empty');
+
+    function openForm(device) {
+      form.reset();
+      if (device) {
+        formTitle.textContent = `Edit device #${device.id}`;
+        idField.value = device.id;
+        hostnameField.value = device.hostname || '';
+        ipField.value = device.ip_address || '';
+        vendorField.value = device.vendor || '';
+        osField.value = device.os_version || '';
+        portField.value = device.ssh_port || 22;
+        locationField.value = device.location || '';
+        statusField.value = device.status || 'unknown';
+        notesField.value = device.notes || '';
+      } else {
+        formTitle.textContent = 'Add device';
+        idField.value = '';
+        portField.value = 22;
+        statusField.value = 'unknown';
+      }
+      formSection.classList.remove('hidden');
+      hostnameField.focus();
+    }
+
+    function closeForm() {
+      formSection.classList.add('hidden');
+      form.reset();
+    }
+
+    addBtn.addEventListener('click', () => openForm(null));
+    cancelBtn.addEventListener('click', closeForm);
+
+    function renderDevices(devices) {
+      tableBody.textContent = '';
+      emptyMsg.classList.toggle('hidden', devices.length > 0);
+      for (const device of devices) {
+        const tr = document.createElement('tr');
+        tr.className = 'border-b border-gray-100 dark:border-gray-800 last:border-0';
+
+        const cells = [
+          device.hostname, device.ip_address || '—', device.vendor || '—',
+          device.os_version || '—', device.ssh_port || '—', device.location || '—',
+        ];
+        for (const value of cells) {
+          tr.appendChild(Object.assign(document.createElement('td'), {
+            className: 'py-1.5 px-3', textContent: String(value),
+          }));
+        }
+
+        const statusCell = document.createElement('td');
+        statusCell.className = 'py-1.5 px-3';
+        const badge = document.createElement('span');
+        badge.className = 'px-1.5 py-0.5 rounded text-xs border border-gray-300 dark:border-gray-600';
+        badge.textContent = device.status || 'unknown';
+        statusCell.appendChild(badge);
+        tr.appendChild(statusCell);
+
+        const actionsCell = document.createElement('td');
+        actionsCell.className = 'py-1.5 px-3 text-right whitespace-nowrap';
+        const editBtn = document.createElement('button');
+        editBtn.type = 'button';
+        editBtn.className = 'text-blue-600 dark:text-blue-400 hover:underline text-sm mr-3';
+        editBtn.textContent = 'Edit';
+        editBtn.addEventListener('click', () => openForm(device));
+        const deleteBtn = document.createElement('button');
+        deleteBtn.type = 'button';
+        deleteBtn.className = 'text-red-600 dark:text-red-400 hover:underline text-sm';
+        deleteBtn.textContent = 'Delete';
+        deleteBtn.addEventListener('click', () => deleteDevice(device));
+        actionsCell.appendChild(editBtn);
+        actionsCell.appendChild(deleteBtn);
+        tr.appendChild(actionsCell);
+
+        tableBody.appendChild(tr);
+      }
+    }
+
+    async function loadDevices() {
+      const params = new URLSearchParams();
+      if (filterQ.value.trim()) params.set('q', filterQ.value.trim());
+      if (filterVendor.value.trim()) params.set('vendor', filterVendor.value.trim());
+      if (filterLocation.value.trim()) params.set('location', filterLocation.value.trim());
+      const query = params.toString();
+      try {
+        const devices = await NetMigrate.apiGet(`/api/devices${query ? `?${query}` : ''}`);
+        renderDevices(devices);
+      } catch (err) {
+        // error banner already shown by apiGet
+      }
+    }
+
+    async function deleteDevice(device) {
+      if (!window.confirm(`Delete device "${device.hostname}"?`)) return;
+      try {
+        await NetMigrate.apiDelete(`/api/devices/${device.id}`);
+        loadDevices();
+      } catch (err) {
+        // error banner already shown
+      }
+    }
+
+    filterForm.addEventListener('submit', (event) => {
+      event.preventDefault();
+      loadDevices();
+    });
+    clearFilterBtn.addEventListener('click', () => {
+      filterQ.value = '';
+      filterVendor.value = '';
+      filterLocation.value = '';
+      loadDevices();
+    });
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const body = {
+        hostname: hostnameField.value.trim(),
+        ip_address: ipField.value.trim() || null,
+        vendor: vendorField.value.trim() || null,
+        os_version: osField.value.trim() || null,
+        ssh_port: portField.value ? Number(portField.value) : null,
+        location: locationField.value.trim() || null,
+        status: statusField.value,
+        notes: notesField.value.trim() || null,
+      };
+      try {
+        if (idField.value) {
+          await NetMigrate.apiPut(`/api/devices/${idField.value}`, body);
+        } else {
+          await NetMigrate.apiPost('/api/devices', body);
+        }
+        closeForm();
+        loadDevices();
+      } catch (err) {
+        // error banner already shown
+      }
+    });
+
+    loadDevices();
+  });
+</script>
+{% endblock %}

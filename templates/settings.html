@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+
+{% block title %}Settings &mdash; NetMigrate{% endblock %}
+
+{% block content %}
+<div class="space-y-8 max-w-2xl">
+  <h1 class="text-xl font-semibold">Settings</h1>
+
+  <section class="space-y-3">
+    <h2 class="text-sm font-medium">System health</h2>
+    <div id="health-panel" class="rounded border border-gray-200 dark:border-gray-700 p-4 text-sm">
+      Loading...
+    </div>
+    <button type="button" id="refresh-health-btn"
+            class="px-3 py-1.5 rounded border border-gray-300 dark:border-gray-600 text-sm hover:bg-gray-100 dark:hover:bg-gray-700">
+      Refresh
+    </button>
+  </section>
+
+  <section class="space-y-3">
+    <h2 class="text-sm font-medium">Appearance</h2>
+    <div class="rounded border border-gray-200 dark:border-gray-700 p-4 flex items-center justify-between text-sm">
+      <div>
+        <div class="font-medium">Theme</div>
+        <div class="text-gray-500 dark:text-gray-400">
+          Currently <span id="current-theme-label">light</span>. Stored locally in this browser only.
+        </div>
+      </div>
+      <button type="button" id="settings-theme-btn"
+              class="px-3 py-1.5 rounded border border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700">
+        Switch theme
+      </button>
+    </div>
+  </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script defer>
+  document.addEventListener('DOMContentLoaded', () => {
+    const healthPanel = document.getElementById('health-panel');
+    const refreshBtn = document.getElementById('refresh-health-btn');
+    const themeLabel = document.getElementById('current-theme-label');
+    const themeBtn = document.getElementById('settings-theme-btn');
+    const navThemeToggle = document.getElementById('theme-toggle');
+
+    function statusDot(ok) {
+      const dot = document.createElement('span');
+      dot.className = `inline-block w-2 h-2 rounded-full mr-2 ${ok ? 'bg-green-500' : 'bg-red-500'}`;
+      return dot;
+    }
+
+    function row(label, valueNode) {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'flex items-center justify-between py-1.5 border-b border-gray-100 dark:border-gray-800 last:border-0';
+      const labelEl = document.createElement('span');
+      labelEl.className = 'text-gray-500 dark:text-gray-400';
+      labelEl.textContent = label;
+      const valueEl = document.createElement('span');
+      valueEl.className = 'flex items-center font-medium';
+      valueEl.appendChild(valueNode);
+      wrapper.appendChild(labelEl);
+      wrapper.appendChild(valueEl);
+      return wrapper;
+    }
+
+    function textNode(text) {
+      return document.createTextNode(text);
+    }
+
+    async function loadHealth() {
+      healthPanel.textContent = 'Loading...';
+      try {
+        const health = await NetMigrate.apiGet('/api/health');
+        healthPanel.textContent = '';
+
+        const statusValue = document.createElement('span');
+        statusValue.appendChild(statusDot(health.status === 'ok'));
+        statusValue.appendChild(textNode(health.status));
+        healthPanel.appendChild(row('API status', statusValue));
+
+        const dbValue = document.createElement('span');
+        dbValue.appendChild(statusDot(health.database));
+        dbValue.appendChild(textNode(health.database ? 'connected' : 'unavailable'));
+        healthPanel.appendChild(row('Database', dbValue));
+
+        const aiValue = document.createElement('span');
+        aiValue.appendChild(statusDot(health.ai_fallback.enabled));
+        aiValue.appendChild(textNode(
+          health.ai_fallback.enabled ? 'enabled' : `disabled (${health.ai_fallback.reason})`,
+        ));
+        healthPanel.appendChild(row('AI fallback', aiValue));
+
+        healthPanel.appendChild(row('Rule catalog', textNode(`${health.rules} rules`)));
+        healthPanel.appendChild(row('Supported vendors', textNode(health.vendors.join(', '))));
+      } catch (err) {
+        healthPanel.textContent = 'Could not load health status.';
+      }
+    }
+
+    function syncThemeLabel() {
+      themeLabel.textContent = document.documentElement.classList.contains('dark') ? 'dark' : 'light';
+    }
+
+    // Delegates to the nav's own toggle button (templates/base.html) rather
+    // than re-implementing the localStorage write -- CLAUDE.md section 12
+    // keeps that write in exactly one place.
+    themeBtn.addEventListener('click', () => {
+      if (navThemeToggle) navThemeToggle.click();
+      syncThemeLabel();
+    });
+
+    refreshBtn.addEventListener('click', loadHealth);
+
+    syncThemeLabel();
+    loadHealth();
+  });
+</script>
+{% endblock %}
