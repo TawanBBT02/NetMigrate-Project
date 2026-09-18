@@ -47,13 +47,19 @@ Two separate problems that the spec currently conflates.
 |---|---|---|---|
 | `GigabitEthernet` | `Gi` | `GigabitEthernet` | `GE` |
 | `TenGigabitEthernet` | `Te` | `XGigabitEthernet` | `XGE` |
-| `FastEthernet` | `Fa` | `Ethernet` | `Eth` |
+| `FastEthernet` | `Fa` | `Ethernet` | `Ethernet` |
 | `Loopback` | `Lo` | `LoopBack` | `LoopBack` |
 | `Vlan` | `Vl` | `Vlanif` | `Vlanif` |
 | `Port-channel` | `Po` | `Eth-Trunk` | `Eth-Trunk` |
 
 Note `Vlan10` → `Vlanif10` and `Port-channel1` → `Eth-Trunk1`. These are commonly
 missed and will appear in any real switch config.
+
+**As implemented** (`netmigrate/rule_catalog.py` `INTERFACE_TYPES`, authoritative):
+renderers always emit the short/single Huawei form shown above, never a distinct
+"long" Huawei spelling — matches this table except the `FastEthernet` row, corrected
+above from `Eth` to `Ethernet` to match the code. `fast` and `loopback` remain UNVER
+(no primary Huawei citation found yet) per `rule-verification-register.md` §ก.5.
 
 ### 2b. Port numbering (Class T — **known limitation**)
 

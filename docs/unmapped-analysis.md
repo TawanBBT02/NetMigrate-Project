@@ -112,7 +112,7 @@ So the system's reasoning is right for the common case (a config exported from
 a device, where credentials are hashed) and wrong for this case (a
 hand-written config with plaintext).
 
-### Recommended fix — wording only, not a new rule
+### Recommended fix — wording only, not a new rule — IMPLEMENTED
 
 The detector already identifies credential lines. It should distinguish
 whether the value looks hashed:
@@ -120,6 +120,20 @@ whether the value looks hashed:
 - Cisco hash markers: `secret 5 $1$`, `secret 8 $8$`, `secret 9 $9$`,
   `password 7 <hex>`
 - Huawei: `irreversible-cipher`, `cipher %^%#`
+
+**Done.** `transforms.py` now has `classify_credential()` returning
+`CRED_HASHED` / `CRED_PLAINTEXT` / `CRED_NO_VALUE`, checked against
+`HASH_MARKERS` and a generic `$...$`-style digest pattern (unrecognised
+formats are conservatively classified as hashed, per the reasoning below).
+`credential_guidance()` selects between `_HASHED_GUIDANCE` and
+`_PLAINTEXT_GUIDANCE` per target vendor and is wired into both renderers.
+Covered by `test_classify_plaintext_credentials`,
+`test_plaintext_message_says_equivalent_exists`,
+`test_plaintext_credentials_still_commented`, and
+`test_plaintext_credentials_still_count_as_unmapped` in
+`test_scope_additions.py` — the last two confirm the policy below (still
+never auto-applied, still counted as unmapped) held after the wording
+split.
 
 **If hashed** — keep the current message. It is correct.
 
@@ -212,12 +226,15 @@ higher coverage number.
 - 5.x.3 Credential handling: technical possibility versus security policy
 - 5.x.4 Consequence for interpreting H1b
 
-### Recommended code change before 24 Sep — one item only
+### Recommended code change before 24 Sep — one item only — DONE
 
-Split the credential message into hashed and plaintext variants (§3). Roughly
-20 lines in `transforms.py` plus two tests. It corrects a false statement in
-system output.
+Split the credential message into hashed and plaintext variants (§3). This
+landed in `transforms.py` with four supporting tests (see §3 above) — the
+last engine change made before feature freeze effort moves fully to
+evaluation and writing. It corrects a false statement in system output.
 
 **Do not add the six category-A rules.** Rule freeze passed on 20 Sep, they
 are out of declared scope, and they are worth far more as a quantified
 Future Work section than as six rules rushed in four days before submission.
+They are now tracked in `command-coverage-future-work.md` §2 (Tier 1)
+alongside a broader review of enterprise campus/branch coverage gaps.

@@ -5,7 +5,11 @@
 still unverified. This is the source table for Appendix A citations and for
 the documentation-conformance measurement (H3b).
 
-**Status as of 16 Sep 2026.**
+**Status as of 20 Sep 2026.** Updated from the original 16 Sep draft: the
+VLAN 40-element bug (finding 1) is fixed and tested, the interface-name
+abbreviation question (finding 2) has been decided, and a fourth UNVER row
+(`fast`/`Ethernet`) was added below — it was missing from the original
+table even though it was always in `rule_catalog.py`.
 
 ---
 
@@ -90,6 +94,7 @@ cannot confirm.
 | `XGE` | `interface XGE0/0/1` | **DOC** | H-IFBASE lists "XGE interface view" among valid command views |
 | `Eth-Trunk` | `interface Eth-Trunk1` | **EX** | H-ETH shows `interface Eth-Trunk1` |
 | `LoopBack` | `interface LoopBack0` | UNVER | **still open** — our own corpus uses it but no primary citation found |
+| `fast` (`FastEthernet` ↔ `Ethernet`) | `interface Ethernet0/0/1` | UNVER | **missing from this register originally** — `rule_catalog.py` has carried this as UNVER with reference `-` since it was written; added here so the register matches the code it is supposed to track |
 
 ### Static routing
 
@@ -155,7 +160,7 @@ since it is the part the thesis argument rests on.
 
 ## Findings requiring code changes
 
-### 1. VLAN list exceeds the documented 40-item limit — REAL BUG
+### 1. VLAN list exceeds the documented 40-item limit — RESOLVED
 
 H-VLAN gives the syntax as:
 
@@ -164,38 +169,35 @@ port trunk allow-pass vlan { { vlan-id1 [ to vlan-id2 ] } &<1-40> | all }
 ```
 
 `&<1-40>` means **at most 40 repetitions** of the `vlan-id [to vlan-id]`
-element in a single command. Our `render_vlan_list_huawei()` emits one line
-regardless of length. A trunk allowing 50 discrete, non-contiguous VLANs
-produces a command the device will reject.
+element in a single command. The original `render_vlan_list_huawei()`
+emitted one line regardless of length, which would produce a command a real
+device rejects for a trunk allowing 50+ discrete, non-contiguous VLANs.
 
-**Severity:** low frequency, total failure when hit. A 50-VLAN trunk is
-unusual but entirely realistic on a distribution switch.
+**Fixed.** `transforms.py` now defines `HUAWEI_VLAN_ELEMENTS_PER_COMMAND =
+40` and `split_vlan_list_huawei()`, which splits into multiple
+`port trunk allow-pass vlan` lines of ≤40 elements each — a *range* still
+counts as one element, matching `&<1-40>` exactly (`10 to 200` is one item,
+not 191). The Huawei parser's existing `|=` accumulation across repeated
+`allow-pass` lines means the round trip is unaffected. Covered by
+`test_forty_one_elements_splits`, `test_split_preserves_every_vlan`, and
+`test_long_list_round_trips_through_split` in `test_scope_additions.py`.
 
-**Fix:** split into multiple `port trunk allow-pass vlan` lines of ≤40
-elements each. Our Huawei parser already accumulates repeated `allow-pass`
-lines with `|=`, so the round trip is unaffected — the fix is renderer-only.
+### 2. Interface name abbreviation — decided: keep abbreviations
 
-**Note:** a *range* counts as one element, so `10 to 200` is one item, not
-191. Count collapsed runs, not VLAN IDs.
+The open question was whether the renderer should emit `GE0/0/1` (matches
+the input abbreviation, but not what a Huawei device's own saved config
+shows) or `GigabitEthernet0/0/1` in full (matches real VRP saved config,
+per H-EX-VLAN/H-EX-OSPF, at the cost of regenerating goldens).
 
-**Before 20 Sep.** This is a rule-level correctness fix, not a new feature.
-
-### 2. Interface name abbreviation — cosmetic, decide deliberately
-
-Our renderer emits `GE0/0/1`. Huawei's own saved configurations write
-`GigabitEthernet0/0/1` in full — both official examples do. `GE` is a valid
-input abbreviation, so output loads either way, but our output does not look
-like what a device produces.
-
-**Options:**
-- **(a)** Emit full names. Output matches real VRP saved config, which makes
-  the report screenshots more credible. Requires regenerating goldens.
-- **(b)** Keep abbreviations and note it in Chapter 5.
-
-I would take (a) — the whole point of the tool is output an engineer can drop
-onto a device, and matching the device's own spelling removes a question a
-reviewer might otherwise ask. Your call; it is a one-line change to
-`INTERFACE_TYPES` plus `make_golden.py --force`.
+**Decided: option (b), keep abbreviations.** `INTERFACE_TYPES` in
+`rule_catalog.py` and Appendix ก §ก.3 both emit the short forms (`GE`,
+`XGE`, `Ethernet`, `LoopBack`, `Vlanif`, `Eth-Trunk`, `NULL`) — this was the
+opposite of what this register originally recommended. Since the goldens
+and all currently-passing tests are built against the abbreviated form,
+re-opening this now would mean re-verifying every golden fixture against
+device output during feature freeze for a cosmetic change with no coverage
+or correctness benefit. Noted as a documented choice for Chapter 5 rather
+than revisited.
 
 ### 3. Port numbering — evidence is better than feared
 
@@ -213,18 +215,26 @@ Still UNVER. The single command `interface GE0/1` on a device settles it.
 
 1. Work down the UNVER rows. Each one needs either a command-reference URL or
    an explicit entry in Chapter 5.
-2. **Three rows remain UNVER after 19 Sep:** `vlan.name`,
-   `interface.description`, and `LoopBack`. All three are low-risk — they are
-   ubiquitous in real configurations and none carries a semantic trap — but
-   they must either be cited or named in Chapter 5. `vlan.name` first: the
-   VLAN command reference URL is in the table above and has not been read.
-3. Add a `verified` column to Appendix A in the thesis carrying the status and
-   reference from this table.
+2. **Four rows remain UNVER as of 20 Sep (rule freeze):** `vlan.name`,
+   `interface.description`, `fast`/`Ethernet`, and `loopback`/`LoopBack`. All
+   four are low-risk — they are ubiquitous in real configurations and none
+   carries a semantic trap — but each must either be cited or named in
+   Chapter 5. Past the rule freeze, closing these is a citation lookup only
+   (updating `status`/`reference` in `rule_catalog.py`), never a behaviour
+   change, so it remains safe to do until submission if time allows.
+3. Appendix A is auto-generated from `rule_catalog.py` via
+   `tools/make_appendix.py` — it already carries a status and reference
+   column per rule, sourced from this register. `test_catalog.py` enforces
+   that every code rule has a catalog entry and vice versa, so the appendix
+   cannot silently drift from the code.
 4. Report **H3b documentation conformance** as: rules with DOC or EX status ÷
-   total rules. Current state: **14 of 22 checked items** carry primary
-   evidence ≈ 64%. That is an honest starting figure, and raising it is
-   straightforward desk work.
+   total rules. Current state (Appendix ก §ก.1): **19 of 23 checked items**
+   carry primary evidence ≈ 83%, up from 14/22 (64%) at the 16 Sep draft of
+   this register — five items were verified against DOC/EX sources since
+   then, entirely as a citation exercise; no rule logic changed to produce
+   this.
 
-Being able to say "64% of rules carried primary vendor citations at the time
-of writing, rising to X% after verification" is a much stronger position than
-an unqualified claim that the mapping is correct.
+Being able to say "83% of rules carried primary vendor citations by rule
+freeze, with the remaining four named explicitly rather than presented as
+validated" is a much stronger position than an unqualified claim that the
+mapping is correct.

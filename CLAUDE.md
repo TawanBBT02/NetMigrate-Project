@@ -7,9 +7,14 @@ Read this file before changing anything. The decisions below were made
 deliberately, several after finding that the obvious approach fails. If a
 change would contradict something here, say so and ask rather than proceeding.
 
-**Current phase: the engine is FROZEN. Only the web layer is under
-construction.** Do not modify anything under `netmigrate/` except new files
-you are explicitly told to create.
+**Current phase: the ENGINE is frozen; the WEB LAYER is not.**
+
+Frozen — do not modify: `ir.py`, `blocks.py`, `transforms.py`, `engine.py`,
+`validation.py`, `rules_cisco.py`, `rules_huawei.py`, `render_cisco.py`,
+`render_huawei.py`, `ai_fallback.py`, `rule_catalog.py`
+
+Open to change within section 5's scope: `persistence.py`, `api.py`,
+`deploy_sim.py`, `templates/`, `static/`
 
 ---
 
@@ -45,14 +50,16 @@ templates/          base.html, index.html, batch.html, devices.html,
 static/             app.js (fetch helpers, theme toggle), diff.js (diff view)
 ```
 
-**Known gap:** `api.py` mounts `/api/*` only — there is no `Jinja2Templates`
-/ `StaticFiles` wiring yet, so none of the page routes (`/`, `/batch`,
-`/devices`, `/deploy`, `/dashboard`, `/history`, `/settings`) are actually
-served. The templates above exist and are correct against the spec, but
-nothing renders them until that wiring is added. This is the next task.
+**Page routes are wired.** `api.py` mounts `/static` via `StaticFiles` and
+serves every page in section 5's table (`/`, `/batch`, `/devices`,
+`/deploy`, `/dashboard`, `/history`, `/settings`) as a bare `Jinja2Templates`
+render — no server-side context beyond `request` (`base.html` uses it only
+to highlight the active nav item); all data is fetched client-side against
+`/api/*`. Confirmed by `test_every_page_route_renders_html` and
+`test_static_files_are_served` in `test_api.py`.
 
-**240 tests passing across 11 suites (196 engine + 44 web layer:
-`test_persistence` 12, `test_api` 19, `test_deploy_sim` 13). Do not let this
+**254 tests passing across 11 suites, 0 failing (207 engine + 47 web layer:
+`test_persistence` 12, `test_api` 22, `test_deploy_sim` 13). Do not let this
 number go down.**
 
 ```bash
@@ -60,9 +67,24 @@ python tools/run_tests.py          # or: pytest -v
 python tools/evaluate.py           # corpus evaluation -> Chapter 4 data
 ```
 
+**Golden fixtures regenerated 20 Sep** (`python tools/make_golden.py
+--force`, workflow per that script's own docstring). Three of eleven
+corpus goldens were stale against current `render_cisco.py` /
+`render_huawei.py` credential-guidance text — `transforms.py` had been
+partially updated to emit per-construct guidance ("privilege-escalation
+password (from ...)" / "user account (from ...)") instead of one generic
+block, and to stop attaching a credential block to `no aaa new-model`
+(`c-sw-distribution.cfg`, which has no `secret`/`password`/`local-user`
+line at all — the old golden's block there was a bug, not a spec). Confirmed
+via `--diff` before forcing: every changed line was guidance-comment text,
+nothing structural. If `test_output_matches_golden` goes red again, run
+`--diff` first and read every line before `--force` — don't rubber-stamp it.
+
 **Not built yet — this is the remaining work:**
 
-- Page-route wiring (see "Known gap" above)
+- None against section 5's scope. All 6 web-layer modules and their page
+  routes are implemented and tested. Remaining effort is evaluation
+  (H3a, H4, H5) and writing per section 10.
 
 ---
 
@@ -282,8 +304,9 @@ definition for cases we wrote rules for.
 - Explain *why* in comments where a decision is non-obvious. Several comments
   in this codebase exist to be quoted in Chapter 3.
 - **Do not add dependencies.** `sqlite3`, `difflib`, `zipfile`, `ipaddress`
-  are standard library. Current external deps: fastapi, uvicorn, jinja2,
-  python-multipart, google-genai, pytest.
+  are standard library. Current external deps (`requirements.txt`): fastapi,
+  uvicorn, jinja2, python-multipart, google-genai, pytest, httpx (required
+  by FastAPI's `TestClient`, used throughout `test_api.py`).
 - No `localStorage` except for the theme toggle.
 - Do not pin a Gemini model version in code or prose; it lives in config
   (`NETMIGRATE_GEMINI_MODEL`).

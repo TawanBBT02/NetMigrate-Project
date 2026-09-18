@@ -445,8 +445,9 @@ Library ของภาษา Python แทนการจัดเก็บใ�
 
 ### 3.10.1 โครงสร้างชุดทดสอบ
 
-ระบบมีชุดทดสอบอัตโนมัติ 11 ชุด รวม 240 กรณีทดสอบ (ณ วันที่ 20 กันยายน 2569) — 196
-กรณีของกลไกการแปลง (ตรึงแล้ว) และ 44 กรณีของชั้นเว็บ (`test_persistence`,
+ระบบมีชุดทดสอบอัตโนมัติ 11 ชุด รวม 254 กรณีทดสอบ (ปรับปรุงล่าสุดหลังการเติม
+`test_every_page_route_renders_html` และการแก้ไขขีดจำกัด VLAN 40 องค์ประกอบ) — 207
+กรณีของกลไกการแปลง (ตรึงแล้ว) และ 47 กรณีของชั้นเว็บ (`test_persistence`,
 `test_api`, `test_deploy_sim`) ที่เพิ่มขึ้นจากการพัฒนาชั้นเว็บในหัวข้อ 5
 
 | ชุดทดสอบ | จำนวน | ขอบเขต |
@@ -454,13 +455,13 @@ Library ของภาษา Python แทนการจัดเก็บใ�
 | `test_core` | 36 | ตัวแยกวิเคราะห์บล็อก และฟังก์ชันแปลงค่า |
 | `test_rules_cisco` | 37 | ตัวอ่านไฟล์ Cisco IOS-XE |
 | `test_roundtrip` | 33 | ตัวอ่าน Huawei, ตัวสร้าง Cisco, การแปลงกลับ |
-| `test_scope_additions` | 32 | ขีดจำกัด 40 องค์ประกอบ, Null0, undo allow-pass, รหัสผ่าน |
+| `test_scope_additions` | 43 | ขีดจำกัด 40 องค์ประกอบ, Null0, undo allow-pass, การจำแนกรหัสผ่านแบบ plaintext/hashed |
 | `test_ai_fallback` | 22 | กลไกสำรองด้วย AI และขอบเขตความปลอดภัย |
 | `test_validation` | 15 | กลไกเปรียบเทียบ IR |
 | `test_golden` | 7 | การถดถอยของผลลัพธ์ และความคงที่ของผลลัพธ์ |
 | `test_catalog` | 14 | ความสอดคล้องระหว่างแคตาล็อกกฎกับโค้ด |
 | `test_persistence` | 12 | ชั้นจัดเก็บข้อมูล SQLite (`persistence.py`) |
-| `test_api` | 19 | Endpoint ทั้งหมดของ FastAPI (`api.py`), TestClient + ฐานข้อมูลชั่วคราว |
+| `test_api` | 22 | Endpoint ทั้งหมดของ FastAPI (`api.py`) รวมเส้นทางหน้าเว็บทุกหน้า (`/`, `/batch`, `/devices`, `/deploy`, `/dashboard`, `/history`, `/settings`) และไฟล์ static, TestClient + ฐานข้อมูลชั่วคราว |
 | `test_deploy_sim` | 13 | ตัวสร้างบันทึกการจำลองส่งค่าคอนฟิกผ่าน SSE (`deploy_sim.py`) |
 
 ### 3.10.2 การทดสอบการถดถอยด้วยไฟล์อ้างอิง (Golden File Testing)

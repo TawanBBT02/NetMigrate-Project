@@ -45,10 +45,17 @@ notation (`GE0/0/1`). Our renderer preserves the numeric portion verbatim.
 interface GE0/1
 ```
 
+**Note:** the review warning for this case already exists —
+`slot_needs_review()` in `transforms.py` flags any non-zero slot in
+slash notation regardless of what this test finds, and it is past rule
+freeze so it cannot be made stricter or looser based on the result. What
+this test settles is only whether the warning's premise is correct, for
+Chapter 5's threats-to-validity discussion, not whether code changes.
+
 | Result | Meaning | Action |
 |---|---|---|
-| Accepted | VRP normalises or accepts two-part | no change needed |
-| Rejected | our output is unloadable for two-part sources | **add a component-count warning before 20 Sep** |
+| Accepted | VRP normalises or accepts two-part | note in Chapter 5 that the existing warning is conservative (fires even when the device would accept it) |
+| Rejected | confirms the warning is catching a real failure, not a false positive | cite this result as evidence the warning is well-founded |
 
 Outcome: ☐ accepted  ☐ rejected
 Exact error text if rejected: ______________________________________
@@ -188,7 +195,10 @@ trustworthy than one claiming everything worked.
 
 1. Enter the file-level results into the `simulator_load` column of
    `results.csv`.
-2. Any **M** failure discovered before **20 Sep** can still be fixed. After
-   the rule freeze it goes to Chapter 5 Future Work.
-3. If `interface GE0/1` was rejected, that fix is the priority — it affects
-   every two-part-notation source file.
+2. Rule freeze (20 Sep) has passed. Any **M** failure found now goes to
+   Chapter 5 Future Work, not into the code — this worksheet no longer
+   feeds back into `rules_cisco.py` / `rules_huawei.py` / `render_*.py`.
+3. The `interface GE0/1` slot-number warning (priority test above) is
+   already implemented regardless of what this session finds — use the
+   result to describe the warning's precision in Chapter 5, not to change
+   code.

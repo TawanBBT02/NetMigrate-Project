@@ -1,12 +1,24 @@
-# netmigrate/ir.py, blocks.py, and transforms.py use only the standard
-# library (dataclasses, enum, typing, ipaddress, re) -- no runtime
-# dependencies yet.
+# NetMigrate runtime and test dependencies.
+#
+# The conversion engine itself (ir, blocks, transforms, engine, validation,
+# rules_*, render_*, rule_catalog) uses only the standard library:
+# dataclasses, enum, typing, ipaddress, re, difflib, statistics, time.
+# SQLite persistence and ZIP export likewise use sqlite3 and zipfile from
+# the standard library.
+#
+# Everything below is for the web layer, the AI fallback, or testing.
+# Do not add a charting library -- dashboard charts are hand-drawn SVG.
 
-# Testing
-# pytest>=7.4
+# Web layer
 fastapi
 uvicorn[standard]
 jinja2
 python-multipart
+
+# AI fallback (optional at runtime -- the system works without it;
+# absent package or missing API key disables the fallback cleanly)
 google-genai
+
+# Testing
 pytest
+httpx           # required by FastAPI TestClient

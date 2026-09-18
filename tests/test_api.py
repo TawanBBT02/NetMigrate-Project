@@ -489,6 +489,44 @@ def test_sse_stream_404_for_unknown_conversion_or_device():
 
 
 # --------------------------------------------------------------------------
+# Page routes (spec section 4) -- Jinja2Templates / StaticFiles wiring
+# --------------------------------------------------------------------------
+
+
+def test_every_page_route_renders_html():
+    with temp_client() as client:
+        for route in (
+            "/",
+            "/batch",
+            "/devices",
+            "/deploy",
+            "/dashboard",
+            "/history",
+            "/settings",
+        ):
+            r = client.get(route)
+            assert r.status_code == 200, route
+            assert r.headers["content-type"].startswith("text/html")
+            assert "<html" in r.text.lower()
+
+
+def test_static_files_are_served():
+    with temp_client() as client:
+        r = client.get("/static/app.js")
+        assert r.status_code == 200
+        assert "javascript" in r.headers["content-type"]
+
+        r = client.get("/static/diff.js")
+        assert r.status_code == 200
+
+
+def test_unknown_page_route_is_404_not_swallowed_by_api():
+    with temp_client() as client:
+        r = client.get("/no-such-page")
+        assert r.status_code == 404
+
+
+# --------------------------------------------------------------------------
 # Fallback runner
 # --------------------------------------------------------------------------
 
