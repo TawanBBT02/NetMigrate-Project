@@ -56,17 +56,31 @@ def build_huawei_ir(parsed: ParsedConfig) -> DeviceConfig:
 
 
 def _unmap(cfg: DeviceConfig, block: ConfigBlock) -> None:
-    cfg.unmapped.append(UnmappedBlock(text=block.text, source_line=block.line_no))
+    cfg.unmapped.append(_make_unmapped(block))
     for child in block.walk():
         if child is block:
             continue
-        cfg.unmapped.append(
-            UnmappedBlock(text=child.text, source_line=child.line_no)
-        )
+        cfg.unmapped.append(_make_unmapped(child))
 
 
 def _unmap_line(cfg: DeviceConfig, block: ConfigBlock) -> None:
-    cfg.unmapped.append(UnmappedBlock(text=block.text, source_line=block.line_no))
+    cfg.unmapped.append(_make_unmapped(block))
+
+
+def _make_unmapped(block: ConfigBlock) -> UnmappedBlock:
+    """Build an UnmappedBlock, tagging credential lines as such.
+
+    Credential material is categorised rather than merely unmapped, so the
+    renderer can emit manual-entry guidance instead of a bare review tag.
+    Password hashes are one-way and vendor-specific; there is no conversion.
+    """
+    if tf.is_credential_line(block.text):
+        return UnmappedBlock(
+            text=block.text,
+            source_line=block.line_no,
+            category="credential",
+        )
+    return UnmappedBlock(text=block.text, source_line=block.line_no)
 
 
 # --------------------------------------------------------------------------
@@ -173,6 +187,27 @@ def _apply_interface_child(itf: Interface, child: ConfigBlock) -> bool:
         return True
     if lowered == ["undo", "shutdown"]:
         itf.admin_down = False
+        return True
+
+    # undo port trunk allow-pass vlan <list>
+    #
+    # Very common in real VRP configs -- it is how the default VLAN is
+    # removed from a trunk. Note the vendors' defaults differ: a Huawei trunk
+    # permits VLAN 1 by default, a Cisco trunk permits all VLANs by default.
+    # Our IR tracks only VLANs explicitly permitted, so `undo ... vlan 1` on a
+    # trunk that never explicitly allowed VLAN 1 is a no-op here -- and that
+    # is correct, because the rendered Cisco `switchport trunk allowed vlan`
+    # list excludes VLAN 1 implicitly by naming the permitted set.
+    if lowered[:5] == ["undo", "port", "trunk", "allow-pass", "vlan"] and len(tokens) >= 6:
+        spec = " ".join(tokens[5:])
+        if spec.lower() == "all":
+            itf.trunk_allowed = set()
+            return True
+        try:
+            ids = tf.parse_vlan_list_huawei(spec)
+        except ValueError:
+            return False
+        itf.trunk_allowed -= ids
         return True
 
     # ip address <addr> <mask|prefixlen>
@@ -351,6 +386,8 @@ def _handle_ospf(cfg: DeviceConfig, block: ConfigBlock) -> None:
 
 _TOP_LEVEL = {
     "sysname": _handle_sysname,
+    "aaa": _unmap,
+    "user-interface": _unmap,
     "vlan": _handle_vlan,
     "interface": _handle_interface,
     "ip": _handle_ip,

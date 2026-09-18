@@ -40,7 +40,7 @@ def render_huawei(cfg: DeviceConfig) -> list[OutputLine]:
     _separator(out)
 
     if cfg.hostname is not None:
-        _rule(out, f"sysname {cfg.hostname}", "sysname", cfg)
+        _rule(out, f"sysname {cfg.hostname}", "system.hostname", cfg)
         _separator(out)
 
     for vlan in cfg.vlans:
@@ -55,6 +55,8 @@ def render_huawei(cfg: DeviceConfig) -> list[OutputLine]:
         _render_ospf(out, cfg.ospf)
         _separator(out)
 
+    if any(r.preference is None for r in cfg.static_routes):
+        _render_preference_warning(out)
     for route in cfg.static_routes:
         _render_static_route(out, route)
     if cfg.static_routes:
@@ -175,9 +177,13 @@ def _render_interface(out: list[OutputLine], itf: Interface) -> None:
     elif itf.link_type is LinkType.TRUNK:
         _rule(out, "port link-type trunk", "port.link-type", itf, indent=1)
         if itf.trunk_allowed:
-            vlan_list = tf.render_vlan_list_huawei(itf.trunk_allowed)
-            _rule(out, f"port trunk allow-pass vlan {vlan_list}",
-                  "port.trunk-allowed", itf, indent=1)
+            # VRP permits at most 40 elements per allow-pass command
+            # (&<1-40> in the documented syntax), so a long discrete list
+            # needs several commands. Repeated lines accumulate on the
+            # device, and our parser accumulates them too.
+            for vlan_list in tf.split_vlan_list_huawei(itf.trunk_allowed):
+                _rule(out, f"port trunk allow-pass vlan {vlan_list}",
+                      "port.trunk-allowed", itf, indent=1)
         if itf.trunk_native is not None:
             _rule(out, f"port trunk pvid vlan {itf.trunk_native}",
                   "port.trunk-native", itf, indent=1)
@@ -192,6 +198,27 @@ def _render_interface(out: list[OutputLine], itf: Interface) -> None:
 # --------------------------------------------------------------------------
 # Static routes
 # --------------------------------------------------------------------------
+
+
+def _render_preference_warning(out: list[OutputLine]) -> None:
+    """Warn once when any static route relies on the vendor default.
+
+    The defaults are not equivalent: a Cisco static route defaults to
+    administrative distance 1, a VRP static route to preference 60. An
+    unqualified static route therefore has a different precedence relative
+    to dynamic routing protocols on each platform, and the syntax-level
+    translation cannot express that. Emitted once per configuration rather
+    than per route, to stay readable.
+    """
+    _review_comment(
+        out,
+        f"{REVIEW_TAG} one or more static routes below specify no "
+        f"preference/distance. Defaults differ between vendors "
+        f"(Cisco administrative distance 1 vs VRP preference 60), so relative "
+        f"precedence against dynamic routes may change. Verify intended "
+        f"route selection on the target device.",
+        None,
+    )
 
 
 def _render_static_route(out: list[OutputLine], route: StaticRoute) -> None:
@@ -299,3 +326,17 @@ def _render_unmapped(out: list[OutputLine], blocks: list[UnmappedBlock]) -> None
                     needs_review=True,
                 )
             )
+            # Credential lines get structural guidance rather than a bare
+            # review tag: password hashes are one-way and vendor-specific,
+            # so there is nothing to translate and the engine says so
+            # explicitly instead of leaving the engineer to work it out.
+            if block.category == "credential":
+                for line in tf.credential_guidance("huawei").splitlines():
+                    out.append(
+                        OutputLine(
+                            text=f"{COMMENT}   {line}",
+                            provenance=Provenance.UNMAPPED,
+                            source_line=block.source_line,
+                            needs_review=True,
+                        )
+                    )

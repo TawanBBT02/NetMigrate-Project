@@ -111,6 +111,45 @@ def render_vlan_list_huawei(ids: set[int]) -> str:
     return " ".join(parts)
 
 
+# Huawei documents the trunk allow-pass syntax as:
+#   port trunk allow-pass vlan { { vlan-id1 [ to vlan-id2 ] } &<1-40> | all }
+# The &<1-40> is a repetition limit: at most 40 elements per command, where a
+# range counts as ONE element. A trunk with many discrete non-contiguous VLANs
+# therefore needs several commands. Repeated allow-pass lines accumulate on
+# the device, and our Huawei parser accumulates them too, so splitting is
+# safe in both directions.
+HUAWEI_VLAN_ELEMENTS_PER_COMMAND = 40
+
+
+def split_vlan_list_huawei(
+    ids: set[int],
+    limit: int = HUAWEI_VLAN_ELEMENTS_PER_COMMAND,
+) -> list[str]:
+    """Render a VLAN set as one or more Huawei VLAN list strings.
+
+    Splits on *element* count, not VLAN count: ``10 to 200`` is a single
+    element even though it covers 191 VLANs. Returns an empty list for an
+    empty set.
+    """
+    runs = _collapse(ids)
+    if not runs:
+        return []
+
+    out: list[str] = []
+    for start in range(0, len(runs), limit):
+        group = runs[start:start + limit]
+        parts = []
+        for lo, hi in group:
+            if lo == hi:
+                parts.append(str(lo))
+            elif hi - lo == 1:
+                parts.extend([str(lo), str(hi)])
+            else:
+                parts.append(f"{lo} to {hi}")
+        out.append(" ".join(parts))
+    return out
+
+
 # --------------------------------------------------------------------------
 # OSPF area identifiers
 #   Cisco accepts both "area 0" and "area 0.0.0.0"
@@ -178,6 +217,7 @@ INTERFACE_TYPES: dict[str, tuple[str, str]] = {
     "loopback": ("Loopback", "LoopBack"),
     "vlan": ("Vlan", "Vlanif"),
     "portchannel": ("Port-channel", "Eth-Trunk"),
+    "null": ("Null", "NULL"),
 }
 
 # Recognised spellings (including abbreviations) -> canonical key.
@@ -197,6 +237,9 @@ _ALIASES: dict[str, str] = {
     # aggregate
     "port-channel": "portchannel", "portchannel": "portchannel",
     "po": "portchannel", "eth-trunk": "portchannel",
+    # Null interface: Cisco spells it Null0, Huawei NULL0. Appears as a
+    # static-route next hop for discard routes.
+    "null": "null", "null0": "null", "nu": "null",
 }
 
 _IF_SPLIT = re.compile(r"^([A-Za-z][A-Za-z\-]*)\s*([\d/.:]*)$")
@@ -253,3 +296,60 @@ def slot_needs_review(if_number: str, canonical_type: str | None = None) -> bool
         return int(first) != 0
     except ValueError:
         return False
+
+
+# --------------------------------------------------------------------------
+# Credential detection
+# --------------------------------------------------------------------------
+
+# Password material cannot be converted between vendors. Cisco type 5 is
+# salted MD5, type 8 PBKDF2-SHA256, type 9 scrypt; Huawei
+# irreversible-cipher uses its own scheme. These are one-way functions with
+# different algorithms, salts and encodings -- there is no transformation
+# from one to the other without the plaintext, which a configuration file
+# does not contain.
+#
+# So the engine never attempts conversion. It detects credential lines and
+# emits structural guidance with an explicit manual-entry marker, which is
+# the only honest behaviour. See proposal Chapter 5.
+
+CREDENTIAL_PATTERNS = (
+    # Cisco
+    "enable secret", "enable password", "username ", "password ",
+    "secret ", "key-string", "authentication-key", "md5 ",
+    # Huawei
+    "local-user", "irreversible-cipher", "cipher ", "simple ",
+    "authentication-mode", "aaa",
+)
+
+CREDENTIAL_GUIDANCE = {
+    "cisco": (
+        "Password hashes cannot be converted between vendors (one-way,\n"
+        "vendor-specific algorithms). Set credentials manually on the target:\n"
+        "  enable secret <PLAINTEXT>\n"
+        "  username <NAME> privilege 15 secret <PLAINTEXT>"
+    ),
+    "huawei": (
+        "Password hashes cannot be converted between vendors (one-way,\n"
+        "vendor-specific algorithms). Set credentials manually on the target:\n"
+        "  aaa\n"
+        "   local-user <NAME> password irreversible-cipher <PLAINTEXT>\n"
+        "   local-user <NAME> privilege level 15"
+    ),
+}
+
+
+def is_credential_line(text: str) -> bool:
+    """True if a configuration line carries or configures credential material.
+
+    Deliberately broad: a false positive costs one extra review comment, a
+    false negative silently copies a hash the target device cannot use.
+    """
+    lowered = text.strip().lower()
+    return any(lowered.startswith(p) or f" {p}" in lowered
+               for p in CREDENTIAL_PATTERNS)
+
+
+def credential_guidance(target_vendor: str) -> str:
+    """Manual-entry guidance for the target vendor. 'cisco' or 'huawei'."""
+    return CREDENTIAL_GUIDANCE[target_vendor]

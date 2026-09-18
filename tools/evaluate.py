@@ -50,6 +50,21 @@ from netmigrate.validation import (  # noqa: E402
 
 CORPUS = ROOT / "corpus"
 
+BANNER_MARKERS = ("GENERATED FILE", "tools/make_golden.py", "regenerate")
+
+
+def strip_banner(text: str) -> str:
+    """Drop make_golden.py's header so comparison sees only config."""
+    kept, in_banner = [], True
+    for line in text.splitlines():
+        if in_banner and line.strip()[:1] in ("!", "#") and any(
+            m in line for m in BANNER_MARKERS
+        ):
+            continue
+        in_banner = False
+        kept.append(line)
+    return "\n".join(kept)
+
 VENDOR_DIRS = {
     Vendor.CISCO: "cisco",
     Vendor.HUAWEI: "huawei",
@@ -82,7 +97,8 @@ def evaluate(repeats: int = 50) -> list[dict]:
             golden_path = CORPUS / "expected" / f"{path.stem}.{SHORT[target]}.cfg"
             if golden_path.is_file():
                 golden = check_golden(
-                    path.stem, text, golden_path.read_text(encoding="utf-8"),
+                    path.stem, text,
+                    strip_banner(golden_path.read_text(encoding="utf-8")),
                     source, target,
                 )
                 golden_state = (
@@ -92,8 +108,10 @@ def evaluate(repeats: int = 50) -> list[dict]:
                 golden = None
                 golden_state = "-"
 
+            cfg_unmapped = _classify_unmapped(text, source)
             rows.append({
                 "file": path.name,
+                "_unmapped_detail": cfg_unmapped,
                 "direction": f"{SHORT[source]}->{SHORT[target]}",
                 "significant_lines": report.significant_lines,
                 "rule_lines": report.rule_lines,
@@ -116,6 +134,63 @@ def evaluate(repeats: int = 50) -> list[dict]:
             })
 
     return rows
+
+
+# Out-of-scope feature families, declared in TK.01 2.3.2.3. Lines matching
+# these are not coverage failures -- they are the declared scope boundary,
+# and separating them is what makes the raw coverage figure interpretable.
+OUT_OF_SCOPE_PREFIXES = {
+    "spanning-tree": "STP", "stp": "STP",
+    "snmp-server": "SNMP", "snmp-agent": "SNMP",
+    "ntp": "NTP", "ntp-service": "NTP",
+    "aaa": "AAA", "username": "AAA", "enable": "AAA",
+    "local-user": "AAA", "line": "AAA", "user-interface": "AAA",
+    "ip access-list": "ACL", "access-list": "ACL", "acl": "ACL",
+    "traffic-policy": "QoS", "traffic-classifier": "QoS",
+    "ip nat": "NAT", "nat": "NAT",
+    "nqa": "NQA", "ip sla": "IPSLA", "ip nbar": "NBAR",
+    "dhcp": "DHCP", "ip http": "HTTP", "version": "META",
+    "service": "META", "router bgp": "BGP",
+    # Child lines of out-of-scope blocks. They appear in the flat unmapped
+    # list without a parent link, so they are matched directly.
+    "permit": "ACL", "deny": "ACL",
+    "passive-interface": "OSPF-ADV", "redistribute": "OSPF-ADV",
+    "import-route": "OSPF-ADV", "nssa": "OSPF-ADV", "stub": "OSPF-ADV",
+    "test-type": "NQA", "destination-address": "NQA",
+    "logging": "LOGGING", "info-center": "LOGGING",
+    "login": "AAA", "transport input": "AAA", "protocol inbound": "AAA",
+    "authentication-mode": "AAA", "service-type": "AAA",
+}
+
+
+def _classify_unmapped(text: str, source) -> dict[str, int]:
+    """Count unmapped lines by out-of-scope feature family."""
+    from netmigrate.engine import get_parser
+
+    try:
+        cfg = get_parser(source)(text)
+    except Exception:  # noqa: BLE001
+        return {}
+
+    counts: dict[str, int] = {}
+    for block in cfg.unmapped:
+        lowered = block.text.strip().lower()
+        # Strip the negation prefix first: 'no ip http server' and
+        # 'undo info-center enable' belong to the family they negate.
+        for negation in ("no ", "undo "):
+            if lowered.startswith(negation):
+                lowered = lowered[len(negation):]
+                break
+        label = "OTHER"
+        if block.category == "credential":
+            label = "CREDENTIAL"
+        else:
+            for prefix, name in OUT_OF_SCOPE_PREFIXES.items():
+                if lowered.startswith(prefix):
+                    label = name
+                    break
+        counts[label] = counts.get(label, 0) + 1
+    return counts
 
 
 def summarise(rows: list[dict], baseline_seconds: float = 0.0) -> None:
@@ -154,6 +229,28 @@ def summarise(rows: list[dict], baseline_seconds: float = 0.0) -> None:
 
     coverage = total_rule / total_sig if total_sig else 0.0
     fidelity = rt_pass / len(graded)
+
+    # What the coverage gap consists of
+    families: dict[str, int] = {}
+    for r in graded:
+        for k, v in (r.get("_unmapped_detail") or {}).items():
+            families[k] = families.get(k, 0) + v
+
+    if families:
+        print("=== Unmapped lines by feature family ===")
+        for name, count in sorted(families.items(), key=lambda kv: -kv[1]):
+            share = count / total_sig if total_sig else 0
+            declared = ("declared out of scope" if name != "OTHER"
+                        else "UNCLASSIFIED -- review")
+            print(f"  {name:<12} {count:>4} lines  {share:>6.1%}  {declared}")
+        out_of_scope = sum(v for k, v in families.items() if k != "OTHER")
+        in_scope_sig = total_sig - out_of_scope
+        in_scope_cov = total_rule / in_scope_sig if in_scope_sig else 0
+        print()
+        print(f"  raw coverage      {coverage:>7.1%}  (all significant lines)")
+        print(f"  in-scope coverage {in_scope_cov:>7.1%}  "
+              f"(excluding declared out-of-scope families)")
+        print()
 
     print("=== Hypothesis results ===")
     print(f"H1  rule coverage        {coverage:>7.1%}   target >= 85%    "

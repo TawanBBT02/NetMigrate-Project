@@ -34,7 +34,7 @@ def render_cisco(cfg: DeviceConfig) -> list[OutputLine]:
     _separator(out)
 
     if cfg.hostname is not None:
-        _rule(out, f"hostname {cfg.hostname}", "hostname", cfg)
+        _rule(out, f"hostname {cfg.hostname}", "system.hostname", cfg)
         _separator(out)
 
     for vlan in cfg.vlans:
@@ -49,6 +49,8 @@ def render_cisco(cfg: DeviceConfig) -> list[OutputLine]:
         _render_ospf(out, cfg.ospf)
         _separator(out)
 
+    if any(r.preference is None for r in cfg.static_routes):
+        _render_preference_warning(out)
     for route in cfg.static_routes:
         _render_static_route(out, route)
     if cfg.static_routes:
@@ -184,6 +186,27 @@ def _render_interface(out: list[OutputLine], itf: Interface) -> None:
 # --------------------------------------------------------------------------
 
 
+def _render_preference_warning(out: list[OutputLine]) -> None:
+    """Warn once when any static route relies on the vendor default.
+
+    The defaults are not equivalent: a Cisco static route defaults to
+    administrative distance 1, a VRP static route to preference 60. An
+    unqualified static route therefore has a different precedence relative
+    to dynamic routing protocols on each platform, and the syntax-level
+    translation cannot express that. Emitted once per configuration rather
+    than per route, to stay readable.
+    """
+    _review_comment(
+        out,
+        f"{REVIEW_TAG} one or more static routes below specify no "
+        f"preference/distance. Defaults differ between vendors "
+        f"(VRP preference 60 vs Cisco administrative distance 1), so relative "
+        f"precedence against dynamic routes may change. Verify intended "
+        f"route selection on the target device.",
+        None,
+    )
+
+
 def _render_static_route(out: list[OutputLine], route: StaticRoute) -> None:
     next_hop = route.next_hop
     try:
@@ -280,3 +303,17 @@ def _render_unmapped(out: list[OutputLine], blocks: list[UnmappedBlock]) -> None
                     needs_review=True,
                 )
             )
+            # Credential lines get structural guidance rather than a bare
+            # review tag: password hashes are one-way and vendor-specific,
+            # so there is nothing to translate and the engine says so
+            # explicitly instead of leaving the engineer to work it out.
+            if block.category == "credential":
+                for line in tf.credential_guidance("cisco").splitlines():
+                    out.append(
+                        OutputLine(
+                            text=f"{COMMENT}   {line}",
+                            provenance=Provenance.UNMAPPED,
+                            source_line=block.source_line,
+                            needs_review=True,
+                        )
+                    )

@@ -58,19 +58,32 @@ def build_cisco_ir(parsed: ParsedConfig) -> DeviceConfig:
 
 def _unmap(cfg: DeviceConfig, block: ConfigBlock) -> None:
     """Record a block (and its children) as unconvertible."""
-    cfg.unmapped.append(
-        UnmappedBlock(text=block.text, source_line=block.line_no)
-    )
+    cfg.unmapped.append(_make_unmapped(block))
     for child in block.children:
-        cfg.unmapped.append(
-            UnmappedBlock(text=child.text, source_line=child.line_no)
-        )
+        cfg.unmapped.append(_make_unmapped(child))
 
 
 def _unmap_line(cfg: DeviceConfig, block: ConfigBlock) -> None:
-    cfg.unmapped.append(
-        UnmappedBlock(text=block.text, source_line=block.line_no)
-    )
+    cfg.unmapped.append(_make_unmapped(block))
+
+
+def _make_unmapped(block: ConfigBlock) -> UnmappedBlock:
+    """Build an UnmappedBlock, tagging credential lines as such.
+
+    Credential material is categorised rather than merely unmapped, so the
+    renderer can emit manual-entry guidance instead of a bare review tag.
+    Password storage is one-way and vendor-specific -- Cisco type 5 is salted
+    MD5, type 8 PBKDF2-SHA256, type 9 scrypt, Huawei irreversible-cipher its
+    own scheme -- so no conversion exists without the plaintext, which a
+    saved configuration does not contain.
+    """
+    if tf.is_credential_line(block.text):
+        return UnmappedBlock(
+            text=block.text,
+            source_line=block.line_no,
+            category="credential",
+        )
+    return UnmappedBlock(text=block.text, source_line=block.line_no)
 
 
 # --------------------------------------------------------------------------
@@ -348,6 +361,12 @@ def _handle_router(cfg: DeviceConfig, block: ConfigBlock) -> None:
 
 _TOP_LEVEL = {
     "hostname": _handle_hostname,
+    # Credential commands are dispatched only so they are categorised as
+    # credentials rather than falling through as generic unmapped lines.
+    "enable": _unmap,
+    "username": _unmap,
+    "aaa": _unmap,
+    "line": _unmap,
     "vlan": _handle_vlan,
     "interface": _handle_interface,
     "ip": _handle_ip,

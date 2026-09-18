@@ -136,6 +136,12 @@ class UnmappedBlock:
     suggestion: Optional[str] = None  # filled by the AI fallback, if enabled
     rationale: Optional[str] = None
 
+    # Set when the line is recognised as belonging to a category the engine
+    # deliberately refuses to convert -- currently only credentials. Carries
+    # structural guidance for manual entry instead of a translation.
+    category: Optional[str] = None
+    guidance: Optional[str] = None
+
 
 # --------------------------------------------------------------------------
 # Root object
